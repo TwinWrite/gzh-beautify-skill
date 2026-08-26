@@ -527,7 +527,7 @@ HTML_TYPE7_TAG = re.compile(r"^ {0,3}</?[a-zA-Z][a-zA-Z0-9-]*")
 ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
 MD_LIST = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])\s")
 MD_QUOTE = re.compile(r"^ {0,3}>")
-MD_THEMATIC = re.compile(r"^ {0,3}(?:[-*_]){3,}\s*$")
+MD_THEMATIC = re.compile(r"^ {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$")
 SETEXT_UNDERLINE = re.compile(r"^ {0,3}(?:=+|-+)\s*$")
 
 
@@ -589,6 +589,8 @@ def recipe_body_usable(body: str) -> bool:
 def recipe_entry_ids(section: str) -> set[str]:
     found: set[str] = set()
     for raw in section.splitlines():
+        if raw.startswith("    ") or raw.startswith("\t"):
+            continue
         line = raw.strip()
         listed = RECIPE_LIST.match(line)
         if listed:
@@ -1117,6 +1119,43 @@ def css_specificity(selector: str) -> tuple[int, int, int]:
     return ids, classes, types
 
 
+def css_attr_selector_matches(inner: str, ad: dict[str, str]) -> bool:
+    """Match [attr], [attr=val], and ^= $= *= ~= |= operators."""
+    spec = inner.strip()
+    if spec.endswith((" i", " I", " s", " S")) and len(spec) > 2:
+        spec = spec[:-2].rstrip()
+    match = re.match(r"^([A-Za-z_:][\w:.-]*)\s*(?:(~=|\|=|\^=|\$=|\*=|=)\s*(.*))?$", spec)
+    if not match:
+        return False
+    name = match.group(1).lower()
+    op = match.group(2)
+    if op is None:
+        return name in ad
+    raw_val = (match.group(3) or "").strip()
+    if len(raw_val) >= 2 and raw_val[0] == raw_val[-1] and raw_val[0] in "\"'":
+        val = raw_val[1:-1]
+    else:
+        val = raw_val
+    actual = ad.get(name)
+    if actual is None:
+        return False
+    if op == "=":
+        return actual == val
+    if not val:
+        return False
+    if op == "^=":
+        return actual.startswith(val)
+    if op == "$=":
+        return actual.endswith(val)
+    if op == "*=":
+        return val in actual
+    if op == "~=":
+        return val in actual.split()
+    if op == "|=":
+        return actual == val or actual.startswith(val + "-")
+    return False
+
+
 def css_compound_matches(compound: str, tag: str, attrs) -> bool:
     subject = strip_css_pseudos(compound)
     if not subject:
@@ -1172,11 +1211,7 @@ def css_compound_matches(compound: str, tag: str, attrs) -> bool:
             if j >= n or subject[j] != "]":
                 return False
             inner = subject[i + 1 : j].strip()
-            if "=" in inner:
-                aname, aval = inner.split("=", 1)
-                if ad.get(aname.strip().lower()) != aval.strip().strip("\"'"):
-                    return False
-            elif inner.strip().lower() not in ad:
+            if not css_attr_selector_matches(inner, ad):
                 return False
             i = j + 1
         else:
@@ -1391,6 +1426,8 @@ class PreviewMarkerCollector(HTMLParser):
             hard = True
         if ltag == "dialog" and not any(name.lower() == "open" for name, _ in attrs):
             hard = True
+        if any(name.lower() == "popover" for name, _ in attrs):
+            hard = True
         state = self.details_stack[-1] if self.details_stack else None
         parent_tag = self.stack[-1][0] if self.stack else None
         is_first_summary = (
@@ -1469,7 +1506,9 @@ class PreviewMarkerCollector(HTMLParser):
                     if len(self.level_children) > 1:
                         self.level_children.pop()
                 del self.stack[i:]
-                break
+                return
+        if ltag == "br":
+            self.handle_starttag("br", [])
 
     def handle_data(self, data: str) -> None:
         if self.skip_depth:

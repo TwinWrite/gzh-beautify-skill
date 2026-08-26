@@ -747,6 +747,18 @@ def main() -> int:
         stub_err, _ = lint_theme.lint_theme(stub_recipe, schema)
         assert_has(stub_err, "tutorial", "仅有单字符说明的配方不算覆盖")
 
+        indented_recipe = Path(tmp) / "indented-recipe-pack"
+        write_mini_theme(indented_recipe)
+        ird = (indented_recipe / "THEME.md").read_text(encoding="utf-8")
+        for kind in lint_theme.ARTICLE_TYPES:
+            ird = ird.replace(
+                f"- `{kind}`: {MINI_RECIPE}\n",
+                f"    {kind}: {MINI_RECIPE}\n",
+            )
+        (indented_recipe / "THEME.md").write_text(ird, encoding="utf-8")
+        ird_err, _ = lint_theme.lint_theme(indented_recipe, schema)
+        assert_has(ird_err, "tutorial", "缩进代码块里的配方行不算覆盖")
+
         mention_heading = Path(tmp) / "mention-heading-pack"
         write_mini_theme(mention_heading)
         mh = (mention_heading / "THEME.md").read_text(encoding="utf-8")
@@ -1107,6 +1119,20 @@ def main() -> int:
         qas_err, _ = lint_theme.lint_theme(quoted_attr_sheet, schema)
         assert_has(qas_err, "slot:footer", "带空格的属性选择器应能隐藏预览标记")
 
+        prefix_attr_sheet = Path(tmp) / "prefix-attr-sheet-pack"
+        write_mini_theme(prefix_attr_sheet)
+        pas = (prefix_attr_sheet / "preview.html").read_text(encoding="utf-8")
+        pas = pas.replace(
+            "</head>",
+            '<style>[data-label^="foot"]{display:none}</style></head>',
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p data-label="footer" data-slot="slot:footer">页脚</p>',
+        )
+        (prefix_attr_sheet / "preview.html").write_text(pas, encoding="utf-8")
+        pas_err, _ = lint_theme.lint_theme(prefix_attr_sheet, schema)
+        assert_has(pas_err, "slot:footer", "属性选择器 ^= 应能隐藏预览标记")
+
         important_sheet = Path(tmp) / "important-sheet-pack"
         write_mini_theme(important_sheet)
         ims = (important_sheet / "preview.html").read_text(encoding="utf-8")
@@ -1167,6 +1193,29 @@ def main() -> int:
         )
         sop_err, _ = lint_theme.lint_theme(select_option_preview, schema)
         assert_has(sop_err, "slot:footer", "未选中的 option 不算预览覆盖")
+
+        stray_br_preview = Path(tmp) / "stray-br-preview-pack"
+        write_mini_theme(stray_br_preview)
+        sbp = (stray_br_preview / "preview.html").read_text(encoding="utf-8")
+        (stray_br_preview / "preview.html").write_text(
+            sbp.replace("<p>slot:footer</p>", "<p>slot:</br>footer</p>"),
+            encoding="utf-8",
+        )
+        sbp_err, _ = lint_theme.lint_theme(stray_br_preview, schema)
+        assert_has(sbp_err, "slot:footer", "游离 </br> 应打断预览标记拼接")
+
+        popover_preview = Path(tmp) / "popover-preview-pack"
+        write_mini_theme(popover_preview)
+        pvp = (popover_preview / "preview.html").read_text(encoding="utf-8")
+        (popover_preview / "preview.html").write_text(
+            pvp.replace(
+                "<p>slot:footer</p>",
+                '<section popover data-slot="slot:footer">slot:footer</section>',
+            ),
+            encoding="utf-8",
+        )
+        pvp_err, _ = lint_theme.lint_theme(popover_preview, schema)
+        assert_has(pvp_err, "slot:footer", "未打开的 popover 不算预览覆盖")
 
         tbody_preview = Path(tmp) / "tbody-preview-pack"
         write_mini_theme(tbody_preview)
@@ -1403,6 +1452,17 @@ def main() -> int:
         assert_true(
             any("结构模型" in e for e in stx_err),
             f"setext 后的 type-7 应吞掉后续标题: {stx_err}",
+        )
+
+        spaced_thematic = Path(tmp) / "spaced-thematic-pack"
+        write_mini_theme(spaced_thematic)
+        sth = (spaced_thematic / "THEME.md").read_text(encoding="utf-8")
+        sth = sth.replace("## 结构模型\n", "前言文字\n_ _ _\n<x>\n## 结构模型\n")
+        (spaced_thematic / "THEME.md").write_text(sth, encoding="utf-8")
+        sth_err, _ = lint_theme.lint_theme(spaced_thematic, schema)
+        assert_true(
+            any("结构模型" in e for e in sth_err),
+            f"_ _ _ 主题分隔后 type-7 应吞掉后续标题: {sth_err}",
         )
 
         type1_selfclose = Path(tmp) / "type1-selfclose-pack"
