@@ -427,6 +427,27 @@ def main() -> int:
         f"blockquote 隐含闭合 p 后中文不应算已包裹: {pq_err}",
     )
 
+    p_then_li = styled_root(
+        '<ul style="margin:0 0 16px;padding-left:1.4em;">'
+        '<p style="margin:0;font-size:16px;"><span leaf="">一。'
+        '<li style="margin:0;font-size:16px;">二。</li></ul>'
+    )
+    pli_err, _, _ = validate_article.validate(p_then_li)
+    assert_true(
+        any("包裹" in e or "leaf" in e.lower() for e in pli_err),
+        f"li 隐含闭合 p 后中文不应算已包裹: {pli_err}",
+    )
+
+    nested_a = styled_root(
+        '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
+        '<a><span leaf="">一。<a>二。</a></span></a></p>'
+    )
+    na_err, _, _ = validate_article.validate(nested_a)
+    assert_true(
+        any("包裹" in e or "leaf" in e.lower() for e in na_err),
+        f"嵌套 a 清栈后中文不应算已包裹: {na_err}",
+    )
+
     table_foster = styled_root(
         '<table style="width:100%;border-collapse:collapse;">'
         '<span leaf="">'
@@ -621,6 +642,26 @@ def main() -> int:
         pp_err, _ = lint_theme.lint_theme(prefix_preview, schema)
         assert_true(any("sig:sig-demo-1" in e for e in pp_err), f"预览前缀命中不应放过缺槽: {pp_err}")
 
+        left_boundary_preview = Path(tmp) / "left-boundary-preview-pack"
+        write_mini_theme(left_boundary_preview)
+        lbp = (left_boundary_preview / "preview.html").read_text(encoding="utf-8")
+        (left_boundary_preview / "preview.html").write_text(
+            lbp.replace("<p>slot:footer</p>", "<p>missing-slot:footer</p>"),
+            encoding="utf-8",
+        )
+        lbp_err, _ = lint_theme.lint_theme(left_boundary_preview, schema)
+        assert_has(lbp_err, "slot:footer", "左侧无边界的 slot:footer 不算覆盖")
+
+        preview_slot_prefix = Path(tmp) / "preview-slot-prefix-pack"
+        write_mini_theme(preview_slot_prefix)
+        psp = (preview_slot_prefix / "preview.html").read_text(encoding="utf-8")
+        (preview_slot_prefix / "preview.html").write_text(
+            psp.replace("<p>slot:footer</p>", "<p>not-preview-slot-footer</p>"),
+            encoding="utf-8",
+        )
+        psp_err, _ = lint_theme.lint_theme(preview_slot_prefix, schema)
+        assert_has(psp_err, "slot:footer", "左侧无边界的 preview-slot-footer 不算覆盖")
+
         comment_preview = Path(tmp) / "comment-preview-pack"
         write_mini_theme(comment_preview)
         cp = (comment_preview / "preview.html").read_text(encoding="utf-8")
@@ -763,6 +804,32 @@ def main() -> int:
         mpv_err, _ = lint_theme.lint_theme(meta_preview, schema)
         assert_has(mpv_err, "slot:footer", "meta 上的预览标记不算覆盖")
 
+        opacity_preview = Path(tmp) / "opacity-preview-pack"
+        write_mini_theme(opacity_preview)
+        opp = (opacity_preview / "preview.html").read_text(encoding="utf-8")
+        (opacity_preview / "preview.html").write_text(
+            opp.replace("<p>slot:footer</p>", '<p style="opacity:0">slot:footer</p>'),
+            encoding="utf-8",
+        )
+        opp_err, _ = lint_theme.lint_theme(opacity_preview, schema)
+        assert_has(opp_err, "slot:footer", "opacity:0 的预览标记不算覆盖")
+
+        tbody_preview = Path(tmp) / "tbody-preview-pack"
+        write_mini_theme(tbody_preview)
+        tbp = (tbody_preview / "preview.html").read_text(encoding="utf-8")
+        (tbody_preview / "preview.html").write_text(
+            tbp.replace(
+                "<p>slot:footer</p>",
+                "<table><tbody hidden><tr><td>note</td></tr><tbody><tr><td>slot:footer</td></tr></table>",
+            ),
+            encoding="utf-8",
+        )
+        tbp_err, _ = lint_theme.lint_theme(tbody_preview, schema)
+        assert_true(
+            not any("slot:footer" in e for e in tbp_err),
+            f"后一个 tbody 隐含闭合 hidden 后标记应算覆盖: {tbp_err}",
+        )
+
         implied_hidden_p_preview = Path(tmp) / "implied-hidden-p-preview-pack"
         write_mini_theme(implied_hidden_p_preview)
         ihp = (implied_hidden_p_preview / "preview.html").read_text(encoding="utf-8")
@@ -865,6 +932,17 @@ def main() -> int:
         assert_true(
             any("缺少章节" in e or "缺少 ### slot:" in e for e in wrapped_err),
             f"HTML 块里的 THEME.md 结构不应算数: {wrapped_err}",
+        )
+
+        unmatched_end_md = Path(tmp) / "unmatched-end-md-pack"
+        write_mini_theme(unmatched_end_md)
+        uem = (unmatched_end_md / "THEME.md").read_text(encoding="utf-8")
+        uem = uem.replace("## 结构模型\n", "<section>\n</span>\n## 结构模型\n")
+        (unmatched_end_md / "THEME.md").write_text(uem, encoding="utf-8")
+        uem_err, _ = lint_theme.lint_theme(unmatched_end_md, schema)
+        assert_true(
+            any("结构模型" in e for e in uem_err),
+            f"未匹配 </span> 不应露出 HTML 块里的标题: {uem_err}",
         )
 
         html_block_fence = Path(tmp) / "html-block-fence-pack"
@@ -1038,6 +1116,25 @@ def main() -> int:
         assert_true(
             any("leaf" in msg or "未包" in msg for _, msg in li_quote_comp),
             f"组件 blockquote 内省略 </li> 应失败: {li_quote_comp}",
+        )
+
+        nested_a_comp = lint_theme.lint_html_block(
+            '<p style="margin:0;font-size:16px;"><a><span leaf="">一。<a>二。</a></span></a></p>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("leaf" in msg or "未包" in msg for _, msg in nested_a_comp),
+            f"组件嵌套 a 清栈后中文应失败: {nested_a_comp}",
+        )
+
+        p_then_li_comp = lint_theme.lint_html_block(
+            '<ul style="margin:0;"><p style="margin:0;font-size:16px;"><span leaf="">一。'
+            '<li style="margin:0;font-size:16px;">二。</li></ul>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("leaf" in msg or "未包" in msg for _, msg in p_then_li_comp),
+            f"组件 li 隐含闭合 p 后中文应失败: {p_then_li_comp}",
         )
 
         link_comp = lint_theme.lint_html_block(

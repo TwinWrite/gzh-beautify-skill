@@ -137,6 +137,9 @@ P_CLOSING_START = frozenset({
     "section",
     "table",
     "ul",
+    "li",
+    "dt",
+    "dd",
 })
 TABLE_START = frozenset({
     "tr",
@@ -149,6 +152,7 @@ TABLE_START = frozenset({
     "colgroup",
     "col",
 })
+TABLE_SECTION = frozenset({"thead", "tbody", "tfoot"})
 TABLE_CONTEXT = frozenset({
     "table",
     "thead",
@@ -360,13 +364,9 @@ class ArticleChecker(HTMLParser):
     def handle_starttag(self, tag: str, attrs) -> None:
         self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
 
-    def _implied_close(self, incoming: str) -> None:
-        targets = set(IMPLIED_END_ON_START.get(incoming, ()))
-        if incoming in P_CLOSING_START:
-            targets.add("p")
+    def _pop_implied(self, targets: set[str], stop: frozenset[str]) -> None:
         if not targets:
             return
-        stop = LIST_ITEM_SCOPE_STOP if incoming == "li" else IMPLIED_END_STOP
         has_target = False
         for tag, *_rest in reversed(self.stack):
             if tag in stop:
@@ -384,7 +384,37 @@ class ArticleChecker(HTMLParser):
             if top in targets:
                 return
 
+    def _implied_close(self, incoming: str) -> None:
+        if incoming in P_CLOSING_START:
+            self._pop_implied({"p"}, IMPLIED_END_STOP)
+        targets = set(IMPLIED_END_ON_START.get(incoming, ()))
+        if not targets:
+            return
+        stop = LIST_ITEM_SCOPE_STOP if incoming == "li" else IMPLIED_END_STOP
+        self._pop_implied(targets, stop)
+
+    def _close_nested_anchor(self, incoming: str) -> None:
+        if incoming != "a":
+            return
+        if not any(tag == "a" for tag, *_rest in self.stack):
+            return
+        while self.stack:
+            top = self.stack[-1][0]
+            if top in {"html", "body", "table", "thead", "tbody", "tfoot", "tr", "td", "th", "template"}:
+                return
+            self.handle_endtag(top)
+            if top == "a":
+                return
+
     def _clear_table_stack(self, incoming: str) -> None:
+        if incoming in TABLE_SECTION:
+            while self.stack:
+                top = self.stack[-1][0]
+                if top in {"table", "html", "body", "template"}:
+                    break
+                self.handle_endtag(top)
+                if top in TABLE_SECTION:
+                    break
         if incoming not in TABLE_START:
             return
         while self.stack:
@@ -396,6 +426,7 @@ class ArticleChecker(HTMLParser):
     def _open(self, tag: str, attrs, *, void: bool) -> None:
         ltag = tag.lower()
         self._implied_close(ltag)
+        self._close_nested_anchor(ltag)
         self._clear_table_stack(ltag)
         ad = {k.lower(): v for k, v in attrs}
         styles = attr_values(attrs, "style")

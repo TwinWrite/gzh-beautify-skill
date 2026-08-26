@@ -227,6 +227,9 @@ P_CLOSING_START = frozenset({
     "section",
     "table",
     "ul",
+    "li",
+    "dt",
+    "dd",
 })
 TABLE_START = frozenset({
     "tr",
@@ -239,6 +242,7 @@ TABLE_START = frozenset({
     "colgroup",
     "col",
 })
+TABLE_SECTION = frozenset({"thead", "tbody", "tfoot"})
 TABLE_CONTEXT = frozenset({
     "table",
     "thead",
@@ -608,11 +612,18 @@ def has_css_declaration(style: str) -> bool:
 
 def inline_style_hides(style: str) -> bool:
     for prop, value in iter_css_declarations(style):
-        token = value.split("!", 1)[0].strip().split()[0].lower() if value else ""
+        raw = value.split("!", 1)[0].strip()
+        token = raw.split()[0].lower() if raw else ""
         if prop == "display" and token == "none":
             return True
         if prop == "visibility" and token == "hidden":
             return True
+        if prop == "opacity":
+            try:
+                if float(token) == 0:
+                    return True
+            except ValueError:
+                pass
     return False
 
 
@@ -626,7 +637,7 @@ class VisibleMarkdownCollector(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.depth = 0
+        self.stack: list[str] = []
         self.parts: list[str] = []
 
     def handle_startendtag(self, tag: str, attrs) -> None:
@@ -634,14 +645,19 @@ class VisibleMarkdownCollector(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs) -> None:
         if is_real_html_tag(tag) and tag.lower() not in VOID_TAGS:
-            self.depth += 1
+            self.stack.append(tag.lower())
 
     def handle_endtag(self, tag: str) -> None:
-        if self.depth:
-            self.depth -= 1
+        ltag = tag.lower()
+        if not is_real_html_tag(ltag):
+            return
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i] == ltag:
+                del self.stack[i:]
+                return
 
     def handle_data(self, data: str) -> None:
-        if self.depth == 0:
+        if not self.stack:
             self.parts.append(data)
 
     def handle_comment(self, _data: str) -> None:
@@ -669,7 +685,9 @@ def has_preview_marker(haystack: str, ident: str, *prefixes: str) -> bool:
             if idx == -1:
                 break
             end = idx + len(needle)
-            if end == len(haystack) or not PREVIEW_ID_TAIL.match(haystack[end]):
+            left_ok = idx == 0 or not PREVIEW_ID_TAIL.match(haystack[idx - 1])
+            right_ok = end == len(haystack) or not PREVIEW_ID_TAIL.match(haystack[end])
+            if left_ok and right_ok:
                 return True
             start = idx + 1
     return False
@@ -699,13 +717,9 @@ class PreviewMarkerCollector(HTMLParser):
         if tag.lower() in VOID_TAGS:
             self.handle_endtag(tag)
 
-    def _implied_close(self, incoming: str) -> None:
-        targets = set(IMPLIED_END_ON_START.get(incoming, ()))
-        if incoming in P_CLOSING_START:
-            targets.add("p")
+    def _pop_implied(self, targets: set[str], stop: frozenset[str]) -> None:
         if not targets:
             return
-        stop = LIST_ITEM_SCOPE_STOP if incoming == "li" else IMPLIED_END_STOP
         has_target = False
         for tag, *_rest in reversed(self.stack):
             if tag in stop:
@@ -723,7 +737,37 @@ class PreviewMarkerCollector(HTMLParser):
             if top in targets:
                 return
 
+    def _implied_close(self, incoming: str) -> None:
+        if incoming in P_CLOSING_START:
+            self._pop_implied({"p"}, IMPLIED_END_STOP)
+        targets = set(IMPLIED_END_ON_START.get(incoming, ()))
+        if not targets:
+            return
+        stop = LIST_ITEM_SCOPE_STOP if incoming == "li" else IMPLIED_END_STOP
+        self._pop_implied(targets, stop)
+
+    def _close_nested_anchor(self, incoming: str) -> None:
+        if incoming != "a":
+            return
+        if not any(tag == "a" for tag, *_rest in self.stack):
+            return
+        while self.stack:
+            top = self.stack[-1][0]
+            if top in {"html", "body", "table", "thead", "tbody", "tfoot", "tr", "td", "th", "template"}:
+                return
+            self.handle_endtag(top)
+            if top == "a":
+                return
+
     def _clear_table_stack(self, incoming: str) -> None:
+        if incoming in TABLE_SECTION:
+            while self.stack:
+                top = self.stack[-1][0]
+                if top in {"table", "html", "body", "template"}:
+                    break
+                self.handle_endtag(top)
+                if top in TABLE_SECTION:
+                    break
         if incoming not in TABLE_START:
             return
         while self.stack:
@@ -735,6 +779,7 @@ class PreviewMarkerCollector(HTMLParser):
     def _open(self, tag: str, attrs) -> None:
         ltag = tag.lower()
         self._implied_close(ltag)
+        self._close_nested_anchor(ltag)
         self._clear_table_stack(ltag)
         hidden = any(name.lower() == "hidden" for name, _ in attrs)
         hidden = hidden or any(inline_style_hides(value or "") for name, value in attrs if name.lower() == "style")
@@ -986,13 +1031,9 @@ class ThemeHtmlInspector(HTMLParser):
     def handle_starttag(self, tag: str, attrs) -> None:
         self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
 
-    def _implied_close(self, incoming: str) -> None:
-        targets = set(IMPLIED_END_ON_START.get(incoming, ()))
-        if incoming in P_CLOSING_START:
-            targets.add("p")
+    def _pop_implied(self, targets: set[str], stop: frozenset[str]) -> None:
         if not targets:
             return
-        stop = LIST_ITEM_SCOPE_STOP if incoming == "li" else IMPLIED_END_STOP
         has_target = False
         for tag, *_rest in reversed(self.stack):
             if tag in stop:
@@ -1010,7 +1051,37 @@ class ThemeHtmlInspector(HTMLParser):
             if top in targets:
                 return
 
+    def _implied_close(self, incoming: str) -> None:
+        if incoming in P_CLOSING_START:
+            self._pop_implied({"p"}, IMPLIED_END_STOP)
+        targets = set(IMPLIED_END_ON_START.get(incoming, ()))
+        if not targets:
+            return
+        stop = LIST_ITEM_SCOPE_STOP if incoming == "li" else IMPLIED_END_STOP
+        self._pop_implied(targets, stop)
+
+    def _close_nested_anchor(self, incoming: str) -> None:
+        if incoming != "a":
+            return
+        if not any(tag == "a" for tag, *_rest in self.stack):
+            return
+        while self.stack:
+            top = self.stack[-1][0]
+            if top in {"html", "body", "table", "thead", "tbody", "tfoot", "tr", "td", "th", "template"}:
+                return
+            self.handle_endtag(top)
+            if top == "a":
+                return
+
     def _clear_table_stack(self, incoming: str) -> None:
+        if incoming in TABLE_SECTION:
+            while self.stack:
+                top = self.stack[-1][0]
+                if top in {"table", "html", "body", "template"}:
+                    break
+                self.handle_endtag(top)
+                if top in TABLE_SECTION:
+                    break
         if incoming not in TABLE_START:
             return
         while self.stack:
@@ -1022,6 +1093,7 @@ class ThemeHtmlInspector(HTMLParser):
     def _open(self, tag: str, attrs, *, void: bool) -> None:
         ltag = tag.lower()
         self._implied_close(ltag)
+        self._close_nested_anchor(ltag)
         self._clear_table_stack(ltag)
         ad = {k.lower(): v for k, v in attrs}
         if ltag in FORBIDDEN_THEME_TAGS:
