@@ -11,6 +11,12 @@ from html.parser import HTMLParser
 
 CJK = re.compile(r"[一-鿿㐀-䶿]")
 HALF_PUNCT = re.compile(r"[,;!?:]|[\"']")
+URL_OR_EMAIL = re.compile(
+    r"(?i)(?:https?://|ftp://|mailto:)[^\s<>\"']+|"
+    r"www\.[^\s<>\"']+|"
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+)
+SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
 CODE_STYLE = re.compile(r"monospace|courier|consolas|sf mono", re.I)
 FONT_SIZE = re.compile(r"font-size\s*:\s*(\d+(?:\.\d+)?)px", re.I)
 PLACEHOLDER = re.compile(r"\{\{[a-z0-9_]+\}\}", re.I)
@@ -67,8 +73,29 @@ URL_ATTRS = {
 }
 
 
+def normalize_scheme_text(value: str) -> str:
+    """Strip ASCII controls/spaces that URL processors ignore in schemes."""
+    return SCHEME_IGNORED.sub("", value or "")
+
+
 def is_executable_url(value: str) -> bool:
-    return bool(value) and bool(EXEC_SCHEME.search(value))
+    if not value:
+        return False
+    return bool(EXEC_SCHEME.search(normalize_scheme_text(value)))
+
+
+def attr_values(attrs, name: str) -> list[str]:
+    lname = name.lower()
+    return [(value or "") for key, value in attrs if key.lower() == lname]
+
+
+def prose_without_urls(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        trimmed = raw.rstrip(".,;:!?)]}\"'" )
+        return " " + raw[len(trimmed) :]
+
+    return URL_OR_EMAIL.sub(repl, text)
 
 
 class ArticleChecker(HTMLParser):
@@ -104,6 +131,7 @@ class ArticleChecker(HTMLParser):
     def _open(self, tag: str, attrs, *, void: bool) -> None:
         ltag = tag.lower()
         ad = {k.lower(): v for k, v in attrs}
+        styles = attr_values(attrs, "style")
         at_root = not self.stack
         if at_root:
             self.top_level.append((ltag, ad))
@@ -113,8 +141,7 @@ class ArticleChecker(HTMLParser):
         if ltag in FORBIDDEN_TAGS:
             self.tag_hits[ltag] += 1
 
-        style = ad.get("style") or ""
-        if style.strip():
+        if any(style.strip() for style in styles):
             self.style_count += 1
             if at_root and ltag == "section":
                 self.styled_root = True
@@ -132,17 +159,19 @@ class ArticleChecker(HTMLParser):
                 self.event_attrs.append(lname)
             if lname in URL_ATTRS and is_executable_url(value or ""):
                 self.exec_urls.append(lname)
-        if style and EXEC_IN_STYLE.search(style):
-            self.exec_urls.append("style")
-        for rx, msg in STYLE_FORBIDDEN:
-            if rx.search(style):
-                self.css_hits.append(msg)
-        for size in FONT_SIZE.findall(style):
-            if float(size) > 24:
-                self.font_size_hits.append(size)
+        for style in styles:
+            normalized = normalize_scheme_text(style)
+            if style and (EXEC_IN_STYLE.search(style) or EXEC_IN_STYLE.search(normalized)):
+                self.exec_urls.append("style")
+            for rx, msg in STYLE_FORBIDDEN:
+                if rx.search(style):
+                    self.css_hits.append(msg)
+            for size in FONT_SIZE.findall(style):
+                if float(size) > 24:
+                    self.font_size_hits.append(size)
 
         is_leaf = ltag == "span" and "leaf" in ad
-        is_code = bool(CODE_STYLE.search(style))
+        is_code = any(CODE_STYLE.search(style) for style in styles)
         if is_leaf:
             self.span_leaf_count += 1
             self.leaf_depth += 1
@@ -179,7 +208,7 @@ class ArticleChecker(HTMLParser):
             parent = self.stack[-1][0] if self.stack else "(root)"
             snippet = text[:24] + ("…" if len(text) > 24 else "")
             self.unwrapped.append((snippet, parent))
-        if self.code_depth == 0 and HALF_PUNCT.search(text):
+        if self.code_depth == 0 and HALF_PUNCT.search(prose_without_urls(text)):
             snippet = text[:24] + ("…" if len(text) > 24 else "")
             self.half_punct.append(snippet)
 

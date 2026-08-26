@@ -69,6 +69,9 @@ HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
 CJK = re.compile(r"[一-鿿㐀-䶿]")
 PLACEHOLDER = re.compile(r"\{\{[a-z0-9_]+\}\}", re.I)
+SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
+PREVIEW_ID_TAIL = re.compile(r"[a-z0-9_-]")
+RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+\.)\s+`?([a-z][a-z0-9_-]*)`?", re.I)
 EXEC_SCHEME = re.compile(
     r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:|"
     r"^\s*data\s*:\s*(?:text\s*/\s*html|text\s*/\s*javascript|application\s*/\s*(?:javascript|ecmascript))",
@@ -175,6 +178,13 @@ def validate_against_schema(instance, schema: dict, node: dict | None = None, pa
             errors.append(f"{path}: 至少 {node['minItems']} 项")
         if "maxItems" in node and len(instance) > node["maxItems"]:
             errors.append(f"{path}: 至多 {node['maxItems']} 项")
+        if node.get("uniqueItems"):
+            serialized = [
+                json.dumps(item, sort_keys=True, ensure_ascii=False) if isinstance(item, (dict, list)) else item
+                for item in instance
+            ]
+            if len(serialized) != len(set(serialized)):
+                errors.append(f"{path}: 含重复项")
         item_schema = node.get("items")
         if item_schema:
             for i, item in enumerate(instance):
@@ -215,7 +225,48 @@ def find_theme_dirs(target: Path) -> list[Path]:
 
 
 def is_executable_url(value: str) -> bool:
-    return bool(value) and bool(EXEC_SCHEME.search(value))
+    if not value:
+        return False
+    return bool(EXEC_SCHEME.search(SCHEME_IGNORED.sub("", value)))
+
+
+def attr_values(attrs, name: str) -> list[str]:
+    lname = name.lower()
+    return [(value or "") for key, value in attrs if key.lower() == lname]
+
+
+def _duplicates(items: list[str]) -> list[str]:
+    return sorted({item for item in items if items.count(item) > 1})
+
+
+def recipe_entry_ids(section: str) -> set[str]:
+    found: set[str] = set()
+    for raw in section.splitlines():
+        line = raw.strip()
+        listed = RECIPE_LIST.match(line)
+        if listed:
+            found.add(listed.group(1).lower())
+            continue
+        if line.startswith("|"):
+            cells = [cell.strip().strip("`") for cell in line.strip("|").split("|")]
+            if cells and re.fullmatch(r"[a-z][a-z0-9_-]*", cells[0], re.I):
+                found.add(cells[0].lower())
+    return found
+
+
+def has_preview_marker(preview: str, ident: str, *prefixes: str) -> bool:
+    for prefix in prefixes:
+        needle = f"{prefix}{ident}"
+        start = 0
+        while True:
+            idx = preview.find(needle, start)
+            if idx == -1:
+                break
+            end = idx + len(needle)
+            if end == len(preview) or not PREVIEW_ID_TAIL.match(preview[end]):
+                return True
+            start = idx + 1
+    return False
 
 
 def _md_section(md_text: str, heading: str) -> str | None:
@@ -279,19 +330,20 @@ class ThemeHtmlInspector(HTMLParser):
                 self._add("ERROR", f"{self.label}: 禁止事件属性 {lname}")
             if lname in URL_ATTRS and is_executable_url(value or ""):
                 self._add("ERROR", f"{self.label}: 禁止可执行 URL")
-        style = ad.get("style") or ""
-        if style and EXEC_IN_STYLE.search(style):
-            self._add("ERROR", f"{self.label}: style 含可执行内容")
-        for rx, msg in THEME_STYLE_CHECKS:
-            if rx.search(style):
-                self._add("ERROR", f"{self.label}: {msg}")
-        for size in FONT_SIZE.findall(style):
-            if float(size) > 24:
-                self._add("ERROR", f"{self.label}: font-size {size}px 超过 24px")
-        if FOURSIDE_DASHED.search(style):
-            self._has_dashed = True
-        if CENTERED.search(style):
-            self._has_center = True
+        for style in attr_values(attrs, "style"):
+            normalized = SCHEME_IGNORED.sub("", style)
+            if style and (EXEC_IN_STYLE.search(style) or EXEC_IN_STYLE.search(normalized)):
+                self._add("ERROR", f"{self.label}: style 含可执行内容")
+            for rx, msg in THEME_STYLE_CHECKS:
+                if rx.search(style):
+                    self._add("ERROR", f"{self.label}: {msg}")
+            for size in FONT_SIZE.findall(style):
+                if float(size) > 24:
+                    self._add("ERROR", f"{self.label}: font-size {size}px 超过 24px")
+            if FOURSIDE_DASHED.search(style):
+                self._has_dashed = True
+            if CENTERED.search(style):
+                self._has_center = True
         is_leaf = ltag == "span" and "leaf" in ad
         if is_leaf:
             self.leaf_depth += 1
@@ -382,14 +434,19 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
     if extra_declared:
         errors.append(f"theme.json slots 含未知必选槽: {', '.join(extra_declared)}")
 
+    unique_sigs: list[str] = []
     raw_sigs = data.get("signature_slots")
     if not isinstance(raw_sigs, list):
         errors.append("theme.json 缺少 signature_slots")
         sigs: list[str] = []
     else:
         sigs = [s for s in raw_sigs if isinstance(s, str)]
-        if len(raw_sigs) < 8 or len(raw_sigs) > 16:
-            errors.append(f"signature_slots 必须 8–16 个，当前 {len(raw_sigs)}")
+        unique_sigs = list(dict.fromkeys(sigs))
+        dup_sigs = _duplicates(sigs)
+        if dup_sigs:
+            errors.append(f"theme.json signature_slots 重复: {', '.join(dup_sigs)}")
+        if len(unique_sigs) < 8 or len(unique_sigs) > 16:
+            errors.append(f"signature_slots 必须 8–16 个不重复 id，当前 {len(unique_sigs)}")
 
     if not md_path.is_file():
         errors.append("缺少 THEME.md")
@@ -401,22 +458,27 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
                 errors.append(f"THEME.md 缺少章节 {heading}")
         recipe = _md_section(md_text, "## 文章类型配方")
         if recipe is not None:
+            covered = recipe_entry_ids(recipe)
             for kind in ARTICLE_TYPES:
-                if kind not in recipe:
+                if kind not in covered:
                     errors.append(f"THEME.md 文章类型配方缺少 {kind}")
 
         slot_ids = SLOT_HEADING.findall(md_text)
         for required in REQUIRED_SLOTS:
             if required not in slot_ids:
                 errors.append(f"THEME.md 缺少 ### slot:{required}")
-        dup = sorted({s for s in slot_ids if slot_ids.count(s) > 1})
+        dup = _duplicates(slot_ids)
         if dup:
             errors.append(f"THEME.md 重复槽: {', '.join(dup)}")
 
         sig_ids = SIG_HEADING.findall(md_text)
-        if len(sig_ids) < 8 or len(sig_ids) > 16:
-            errors.append(f"THEME.md 签名槽必须 8–16 个，当前 {len(sig_ids)}")
-        if sorted(sigs) != sorted(sig_ids):
+        unique_sig_ids = list(dict.fromkeys(sig_ids))
+        sig_dup = _duplicates(sig_ids)
+        if sig_dup:
+            errors.append(f"THEME.md 重复签名槽: {', '.join(sig_dup)}")
+        if len(unique_sig_ids) < 8 or len(unique_sig_ids) > 16:
+            errors.append(f"THEME.md 签名槽必须 8–16 个不重复 id，当前 {len(unique_sig_ids)}")
+        if sorted(unique_sigs) != sorted(unique_sig_ids):
             errors.append("theme.json signature_slots 与 THEME.md ### sig:* 不一致")
 
         for label, _kind, _ident, region in iter_component_regions(md_text):
@@ -437,14 +499,10 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
         if "<html" not in preview.lower():
             warnings.append("preview.html 不像完整 HTML 文档")
         for slot in REQUIRED_SLOTS:
-            if f"slot:{slot}" not in preview and f"preview-slot-{slot}" not in preview:
+            if not has_preview_marker(preview, slot, "slot:", "preview-slot-"):
                 errors.append(f"preview.html 未展示 slot:{slot}")
-        for sig in sigs:
-            if (
-                f"sig:{sig}" not in preview
-                and f"preview-sig-{sig}" not in preview
-                and f"preview-slot-{sig}" not in preview
-            ):
+        for sig in unique_sigs:
+            if not has_preview_marker(preview, sig, "sig:", "preview-sig-", "preview-slot-"):
                 errors.append(f"preview.html 未展示 sig:{sig}")
 
     return errors, warnings

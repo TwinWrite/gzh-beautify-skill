@@ -167,6 +167,7 @@
       "type": "array",
       "minItems": 8,
       "maxItems": 16,
+      "uniqueItems": true,
       "items": { "type": "string" }
     },
     "files": {

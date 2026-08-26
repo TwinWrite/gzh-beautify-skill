@@ -207,6 +207,24 @@ def main() -> int:
     j_err, _, _ = validate_article.validate(js_link)
     assert_true(any("javascript" in e.lower() or "可执行" in e for e in j_err), f"javascript: 应失败: {j_err}")
 
+    tabbed_js = styled_root(
+        '<p style="font-size:16px;margin:0 0 16px;">'
+        '<a href="java&#x09;script:alert(1)"><span leaf="">点击。</span></a></p>'
+    )
+    tj_err, _, _ = validate_article.validate(tabbed_js)
+    assert_true(any("可执行" in e or "javascript" in e.lower() for e in tj_err), f"java\\tscript: 应失败: {tj_err}")
+
+    dup_style = (
+        '<section style="position:absolute;max-width:677px" style="max-width:677px;margin:0 auto">'
+        f"{body_p('正文。')}</section>"
+    )
+    ds_err, _, _ = validate_article.validate(dup_style)
+    assert_true(any("position" in e.lower() or "absolute" in e.lower() for e in ds_err), f"重复 style 应抓到 position: {ds_err}")
+
+    url_prose = styled_root(body_p("访问 https://example.com 获取资料。"))
+    _, url_warn, _ = validate_article.validate(url_prose)
+    assert_true(not any("半角" in w for w in url_warn), f"正文 URL 不应报半角标点: {url_warn}")
+
     wrapped_doc = (
         "<html><body>"
         + styled_root(body_p("正文。"))
@@ -303,6 +321,40 @@ def main() -> int:
         (no_recipe / "THEME.md").write_text(rmd.replace("- `tutorial`: hero + h2 + paragraph\n", ""), encoding="utf-8")
         nr_err, _ = lint_theme.lint_theme(no_recipe, schema)
         assert_has(nr_err, "tutorial", "缺文章类型配方应失败")
+
+        named_recipe = Path(tmp) / "named-recipe-pack"
+        write_mini_theme(named_recipe)
+        nrmd = (named_recipe / "THEME.md").read_text(encoding="utf-8")
+        nrmd = nrmd.replace(
+            "## 文章类型配方\n\n",
+            "## 文章类型配方\n\n本配方覆盖 tutorial 等场景。\n- `not-tutorial`: hero + h2\n",
+        )
+        nrmd = nrmd.replace("- `tutorial`: hero + h2 + paragraph\n", "")
+        (named_recipe / "THEME.md").write_text(nrmd, encoding="utf-8")
+        named_err, _ = lint_theme.lint_theme(named_recipe, schema)
+        assert_has(named_err, "tutorial", "仅提及 tutorial 不算配方")
+
+        prefix_preview = Path(tmp) / "prefix-preview-pack"
+        write_mini_theme(prefix_preview)
+        pp = (prefix_preview / "preview.html").read_text(encoding="utf-8")
+        (prefix_preview / "preview.html").write_text(pp.replace("sig:sig-demo-1", "sig:sig-demo-10"), encoding="utf-8")
+        pp_err, _ = lint_theme.lint_theme(prefix_preview, schema)
+        assert_true(any("sig:sig-demo-1" in e for e in pp_err), f"预览前缀命中不应放过缺槽: {pp_err}")
+
+        dup_sig = Path(tmp) / "dup-sig-pack"
+        write_mini_theme(dup_sig)
+        dup_payload = json.loads((dup_sig / "theme.json").read_text(encoding="utf-8"))
+        dup_payload["signature_slots"] = ["sig-demo-1"] * 8
+        (dup_sig / "theme.json").write_text(json.dumps(dup_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        dmd = (dup_sig / "THEME.md").read_text(encoding="utf-8")
+        for i in range(2, 9):
+            dmd = dmd.replace(f"### sig:sig-demo-{i}", "### sig:sig-demo-1")
+        (dup_sig / "THEME.md").write_text(dmd, encoding="utf-8")
+        dup_err, _ = lint_theme.lint_theme(dup_sig, schema)
+        assert_true(
+            any("重复" in e or "不重复" in e or "含重复项" in e for e in dup_err),
+            f"重复签名槽 id 应失败: {dup_err}",
+        )
 
         lint_ok = run_cli([sys.executable, str(SCRIPTS / "lint_theme.py"), str(good_dir)])
         assert_true(lint_ok.returncode == 0, f"lint mini 应通过\n{lint_ok.stdout}{lint_ok.stderr}")

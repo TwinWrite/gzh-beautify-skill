@@ -15,7 +15,7 @@ themes/{id}/
 
 字段以 [theme.schema.json](theme.schema.json) 为准。生产时先写这份，再生成 HTML，避免色值在预览和组件库里各写各的。
 
-`slots` 数组必须列出下面 26 个必选槽，顺序不限。`signature_slots` 列出签名槽 id，必填，8–16 个。
+`slots` 数组必须列出下面 26 个必选槽，顺序不限。`signature_slots` 列出签名槽 id，必填、互不重复，8–16 个。
 
 ## THEME.md 章节（固定标题，lint 按标题抓）
 
