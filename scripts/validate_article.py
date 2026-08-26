@@ -414,6 +414,16 @@ class ArticleChecker(HTMLParser):
         self.style_count = 0
         self.styled_root = False
         self.dup_style_count = 0
+        self.prose_buf: list[str] = []
+
+    def _flush_prose(self) -> None:
+        joined = "".join(self.prose_buf)
+        self.prose_buf.clear()
+        if not joined or self.code_depth:
+            return
+        if CJK.search(joined) and HALF_PUNCT.search(prose_for_punct(joined)):
+            snippet = joined.strip()[:24] + ("…" if len(joined.strip()) > 24 else "")
+            self.half_punct.append(snippet)
 
     def handle_startendtag(self, tag: str, attrs) -> None:
         self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
@@ -486,6 +496,8 @@ class ArticleChecker(HTMLParser):
         self._implied_close(ltag)
         self._close_nested_anchor(ltag)
         self._clear_table_stack(ltag)
+        if ltag in LEAF_BLOCK_TAGS:
+            self._flush_prose()
         ad = {k.lower(): v for k, v in attrs}
         styles = attr_values(attrs, "style")
         at_root = not self.stack
@@ -536,6 +548,7 @@ class ArticleChecker(HTMLParser):
             self.span_leaf_count += 1
             self.leaf_depth += 1
         if is_code and not void:
+            self._flush_prose()
             self.code_depth += 1
         if self.leaf_depth and ltag in LEAF_BLOCK_TAGS:
             self.leaf_has_block = True
@@ -548,6 +561,8 @@ class ArticleChecker(HTMLParser):
         for i in range(len(self.stack) - 1, -1, -1):
             if self.stack[i][0] == ltag:
                 matched = True
+                if ltag in LEAF_BLOCK_TAGS:
+                    self._flush_prose()
                 for _, was_leaf, was_code in self.stack[i:]:
                     if was_leaf:
                         self.leaf_depth -= 1
@@ -575,18 +590,17 @@ class ArticleChecker(HTMLParser):
             if text:
                 self.root_text.append(text[:24])
             return
+        if any(t in SKIP_TAGS for t, _, _ in self.stack):
+            return
+        if self.code_depth == 0:
+            self.prose_buf.append(data)
         text = data.strip()
         if not text or not CJK.search(text):
-            return
-        if any(t in SKIP_TAGS for t, _, _ in self.stack):
             return
         if self.leaf_depth == 0:
             parent = self.stack[-1][0] if self.stack else "(root)"
             snippet = text[:24] + ("…" if len(text) > 24 else "")
             self.unwrapped.append((snippet, parent))
-        if self.code_depth == 0 and HALF_PUNCT.search(prose_for_punct(text)):
-            snippet = text[:24] + ("…" if len(text) > 24 else "")
-            self.half_punct.append(snippet)
 
 
 def _count_msg(template: str, n: int) -> str:
@@ -620,6 +634,7 @@ def validate(html: str) -> tuple[list[str], list[str], int]:
         checker.close()
     except Exception as exc:  # noqa: BLE001 — parser errors should not crash lint
         warnings.append(f"HTML 解析中断: {exc}")
+    checker._flush_prose()
 
     emitted_tag_msgs: set[str] = set()
     for tag, n in checker.tag_hits.items():

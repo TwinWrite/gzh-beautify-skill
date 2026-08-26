@@ -53,6 +53,9 @@ def _slot_html(slot: str) -> str:
     )
 
 
+MINI_RECIPE = "核心槽 hero + h2 + paragraph；可用签名槽 sig-demo-1；不要用 image_gif"
+
+
 def write_mini_theme(path: Path, *, omit_footer: bool = False, pale_ink: bool = False) -> None:
     path.mkdir(parents=True, exist_ok=True)
     slots = [s for s in REQUIRED if not (omit_footer and s == "footer")]
@@ -116,7 +119,7 @@ def write_mini_theme(path: Path, *, omit_footer: bool = False, pale_ink: bool = 
     md.append("## 文章骨架\n\n1. root\n2. hero\n3. toc\n4. h2 循环\n5. footer\n")
     md.append("## 文章类型配方\n\n")
     for kind in lint_theme.ARTICLE_TYPES:
-        md.append(f"- `{kind}`: hero + h2 + paragraph\n")
+        md.append(f"- `{kind}`: {MINI_RECIPE}\n")
     md.append("\n## Markdown 映射\n\n| Markdown | 槽 |\n|---|---|\n| `#` | hero |\n")
     (path / "THEME.md").write_text("".join(md), encoding="utf-8")
 
@@ -236,6 +239,13 @@ def main() -> int:
     numeric_prose = styled_root(body_p("会议 12:30 开始，约 1,234 人，比例 16:9。"))
     _, num_warn, _ = validate_article.validate(numeric_prose)
     assert_true(not any("半角" in w for w in num_warn), f"数字字面量中的 ,/: 不应报半角标点: {num_warn}")
+
+    split_punct = styled_root(
+        '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
+        '<span leaf="">中文</span><span leaf="">:</span><span leaf="">继续。</span></p>'
+    )
+    _, sp_warn, _ = validate_article.validate(split_punct)
+    assert_true(any("半角" in w for w in sp_warn), f"拆开的半角冒号应警告: {sp_warn}")
 
     empty_first_style = (
         '<section style="" style="max-width:677px;margin:0 auto">'
@@ -669,7 +679,7 @@ def main() -> int:
         no_recipe = Path(tmp) / "no-recipe-pack"
         write_mini_theme(no_recipe)
         rmd = (no_recipe / "THEME.md").read_text(encoding="utf-8")
-        (no_recipe / "THEME.md").write_text(rmd.replace("- `tutorial`: hero + h2 + paragraph\n", ""), encoding="utf-8")
+        (no_recipe / "THEME.md").write_text(rmd.replace(f"- `tutorial`: {MINI_RECIPE}\n", ""), encoding="utf-8")
         nr_err, _ = lint_theme.lint_theme(no_recipe, schema)
         assert_has(nr_err, "tutorial", "缺文章类型配方应失败")
 
@@ -680,7 +690,7 @@ def main() -> int:
             "## 文章类型配方\n\n",
             "## 文章类型配方\n\n本配方覆盖 tutorial 等场景。\n- `not-tutorial`: hero + h2\n",
         )
-        nrmd = nrmd.replace("- `tutorial`: hero + h2 + paragraph\n", "")
+        nrmd = nrmd.replace("- `tutorial`: " + MINI_RECIPE + "\n", "")
         (named_recipe / "THEME.md").write_text(nrmd, encoding="utf-8")
         named_err, _ = lint_theme.lint_theme(named_recipe, schema)
         assert_has(named_err, "tutorial", "仅提及 tutorial 不算配方")
@@ -689,7 +699,7 @@ def main() -> int:
         write_mini_theme(name_only_recipe)
         nord = (name_only_recipe / "THEME.md").read_text(encoding="utf-8")
         for kind in lint_theme.ARTICLE_TYPES:
-            nord = nord.replace(f"- `{kind}`: hero + h2 + paragraph\n", f"- {kind}\n")
+            nord = nord.replace(f"- `{kind}`: {MINI_RECIPE}\n", f"- {kind}\n")
         (name_only_recipe / "THEME.md").write_text(nord, encoding="utf-8")
         nord_err, _ = lint_theme.lint_theme(name_only_recipe, schema)
         assert_has(nord_err, "tutorial", "仅有类型名的列表项不算配方")
@@ -698,7 +708,7 @@ def main() -> int:
         write_mini_theme(plain_recipe)
         prd = (plain_recipe / "THEME.md").read_text(encoding="utf-8")
         for kind in lint_theme.ARTICLE_TYPES:
-            prd = prd.replace(f"- `{kind}`: hero + h2 + paragraph\n", f"{kind}：hero + h2 + paragraph\n")
+            prd = prd.replace(f"- `{kind}`: {MINI_RECIPE}\n", f"{kind}：{MINI_RECIPE}\n")
         (plain_recipe / "THEME.md").write_text(prd, encoding="utf-8")
         plain_err, _ = lint_theme.lint_theme(plain_recipe, schema)
         assert_true(not plain_err, f"普通配方行应通过: {plain_err}")
@@ -707,10 +717,19 @@ def main() -> int:
         write_mini_theme(paren_recipe)
         pnd = (paren_recipe / "THEME.md").read_text(encoding="utf-8")
         for i, kind in enumerate(lint_theme.ARTICLE_TYPES, 1):
-            pnd = pnd.replace(f"- `{kind}`: hero + h2 + paragraph\n", f"{i}) {kind}: hero + h2 + paragraph\n")
+            pnd = pnd.replace(f"- `{kind}`: {MINI_RECIPE}\n", f"{i}) {kind}: {MINI_RECIPE}\n")
         (paren_recipe / "THEME.md").write_text(pnd, encoding="utf-8")
         paren_err, _ = lint_theme.lint_theme(paren_recipe, schema)
         assert_true(not paren_err, f"括号有序列表配方应通过: {paren_err}")
+
+        stub_recipe = Path(tmp) / "stub-recipe-pack"
+        write_mini_theme(stub_recipe)
+        srd = (stub_recipe / "THEME.md").read_text(encoding="utf-8")
+        for kind in lint_theme.ARTICLE_TYPES:
+            srd = srd.replace(f"- `{kind}`: {MINI_RECIPE}\n", f"- `{kind}`: x\n")
+        (stub_recipe / "THEME.md").write_text(srd, encoding="utf-8")
+        stub_err, _ = lint_theme.lint_theme(stub_recipe, schema)
+        assert_has(stub_err, "tutorial", "仅有单字符说明的配方不算覆盖")
 
         mention_heading = Path(tmp) / "mention-heading-pack"
         write_mini_theme(mention_heading)
@@ -893,6 +912,22 @@ def main() -> int:
         ssp_err, _ = lint_theme.lint_theme(second_summary_preview, schema)
         assert_has(ssp_err, "slot:footer", "关闭 details 的第二个 summary 不算覆盖")
 
+        nested_then_direct_summary = Path(tmp) / "nested-then-direct-summary-pack"
+        write_mini_theme(nested_then_direct_summary)
+        ntds = (nested_then_direct_summary / "preview.html").read_text(encoding="utf-8")
+        (nested_then_direct_summary / "preview.html").write_text(
+            ntds.replace(
+                "<p>slot:footer</p>",
+                "<details><div><summary>Other</summary></div><summary>slot:footer</summary></details>",
+            ),
+            encoding="utf-8",
+        )
+        ntds_err, _ = lint_theme.lint_theme(nested_then_direct_summary, schema)
+        assert_true(
+            not any("slot:footer" in e for e in ntds_err),
+            f"关闭 details 的第一个直接 summary 应算覆盖: {ntds_err}",
+        )
+
         meta_preview = Path(tmp) / "meta-preview-pack"
         write_mini_theme(meta_preview)
         mpv = (meta_preview / "preview.html").read_text(encoding="utf-8")
@@ -984,6 +1019,50 @@ def main() -> int:
         )
         prm_err, _ = lint_theme.lint_theme(param_preview, schema)
         assert_has(prm_err, "slot:footer", "param 上的预览标记不算覆盖")
+
+        iframe_preview = Path(tmp) / "iframe-preview-pack"
+        write_mini_theme(iframe_preview)
+        ifp = (iframe_preview / "preview.html").read_text(encoding="utf-8")
+        (iframe_preview / "preview.html").write_text(
+            ifp.replace("<p>slot:footer</p>", "<iframe>slot:footer</iframe>"),
+            encoding="utf-8",
+        )
+        ifp_err, _ = lint_theme.lint_theme(iframe_preview, schema)
+        assert_has(ifp_err, "slot:footer", "iframe 回退文本不算预览覆盖")
+
+        canvas_preview = Path(tmp) / "canvas-preview-pack"
+        write_mini_theme(canvas_preview)
+        cvsp = (canvas_preview / "preview.html").read_text(encoding="utf-8")
+        (canvas_preview / "preview.html").write_text(
+            cvsp.replace("<p>slot:footer</p>", "<canvas>slot:footer</canvas>"),
+            encoding="utf-8",
+        )
+        cvsp_err, _ = lint_theme.lint_theme(canvas_preview, schema)
+        assert_has(cvsp_err, "slot:footer", "canvas 回退文本不算预览覆盖")
+
+        sheet_hidden_preview = Path(tmp) / "sheet-hidden-preview-pack"
+        write_mini_theme(sheet_hidden_preview)
+        shp = (sheet_hidden_preview / "preview.html").read_text(encoding="utf-8")
+        shp = shp.replace(
+            "</head>",
+            "<style>#footer{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer" data-slot="slot:footer">页脚</p>',
+        )
+        (sheet_hidden_preview / "preview.html").write_text(shp, encoding="utf-8")
+        shp_err, _ = lint_theme.lint_theme(sheet_hidden_preview, schema)
+        assert_has(shp_err, "slot:footer", "预览样式表 display:none 的标记不算覆盖")
+
+        stray_td_preview = Path(tmp) / "stray-td-preview-pack"
+        write_mini_theme(stray_td_preview)
+        stdp = (stray_td_preview / "preview.html").read_text(encoding="utf-8")
+        (stray_td_preview / "preview.html").write_text(
+            stdp.replace("<p>slot:footer</p>", "<div hidden><td>slot:footer</td></div>"),
+            encoding="utf-8",
+        )
+        stdp_err, _ = lint_theme.lint_theme(stray_td_preview, schema)
+        assert_has(stdp_err, "slot:footer", "hidden 祖先里的游离 td 不算覆盖")
 
         tbody_preview = Path(tmp) / "tbody-preview-pack"
         write_mini_theme(tbody_preview)
@@ -1167,6 +1246,33 @@ def main() -> int:
         (type7_malformed / "THEME.md").write_text(t7m, encoding="utf-8")
         t7m_err, _ = lint_theme.lint_theme(type7_malformed, schema)
         assert_true(not t7m_err, f"残缺 type-7 标签不应吞掉标题: {t7m_err}")
+
+        type7_dollar = Path(tmp) / "type7-dollar-pack"
+        write_mini_theme(type7_dollar)
+        t7d = (type7_dollar / "THEME.md").read_text(encoding="utf-8")
+        t7d = t7d.replace("## 结构模型\n", "<x $>\n## 结构模型\n")
+        (type7_dollar / "THEME.md").write_text(t7d, encoding="utf-8")
+        t7d_err, _ = lint_theme.lint_theme(type7_dollar, schema)
+        assert_true(not t7d_err, f"非法属性名不应开启 type-7 块: {t7d_err}")
+
+        cdata_case = Path(tmp) / "cdata-case-pack"
+        write_mini_theme(cdata_case)
+        cdc = (cdata_case / "THEME.md").read_text(encoding="utf-8")
+        cdc = cdc.replace("## 结构模型\n", "<![cdata[\n## 结构模型\n]]>\n")
+        (cdata_case / "THEME.md").write_text(cdc, encoding="utf-8")
+        cdc_err, _ = lint_theme.lint_theme(cdata_case, schema)
+        assert_true(not cdc_err, f"小写 cdata 不应按 type-5 HTML 块吞掉标题: {cdc_err}")
+
+        type1_spaced = Path(tmp) / "type1-spaced-pack"
+        write_mini_theme(type1_spaced)
+        t1s = (type1_spaced / "THEME.md").read_text(encoding="utf-8")
+        t1s = t1s.replace("## 结构模型\n", "<script>\n</script >\n## 结构模型\n")
+        (type1_spaced / "THEME.md").write_text(t1s, encoding="utf-8")
+        t1s_err, _ = lint_theme.lint_theme(type1_spaced, schema)
+        assert_true(
+            any("结构模型" in e for e in t1s_err),
+            f"</script > 不应结束 type-1 块: {t1s_err}",
+        )
 
         type1_mismatch = Path(tmp) / "type1-mismatch-pack"
         write_mini_theme(type1_mismatch)

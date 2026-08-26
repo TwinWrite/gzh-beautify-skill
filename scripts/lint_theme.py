@@ -71,8 +71,15 @@ CJK = re.compile(r"[一-鿿㐀-䶿]")
 PLACEHOLDER = re.compile(r"\{\{")
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
 PREVIEW_ID_TAIL = re.compile(r"[a-z0-9_-]")
-RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+[.)])\s+`?([a-z][a-z0-9_-]*)`?\s*[:：]\s*\S", re.I)
-RECIPE_PLAIN = re.compile(r"^`?([a-z][a-z0-9_-]*)`?\s*[:：]\s*\S", re.I)
+RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+[.)])\s+`?([a-z][a-z0-9_-]*)`?\s*[:：]\s*(\S.*)$", re.I)
+RECIPE_PLAIN = re.compile(r"^`?([a-z][a-z0-9_-]*)`?\s*[:：]\s*(\S.*)$", re.I)
+RECIPE_SLOT = re.compile(
+    r"(?<![a-z0-9_-])(?:" + "|".join(re.escape(s) for s in REQUIRED_SLOTS) + r")(?![a-z0-9_-])",
+    re.I,
+)
+RECIPE_SIG = re.compile(r"签名槽|\bsig:|\bsig-[a-z0-9-]+", re.I)
+RECIPE_EXCLUDE = re.compile(r"不要用|不要|排除|不用")
+HTML_ATTR_NAME = re.compile(r"[A-Za-z_:][A-Za-z0-9_.:-]*")
 EXEC_SCHEME = re.compile(
     r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:|"
     r"^\s*data\s*:\s*(?:text\s*/\s*html|text\s*/\s*javascript|application\s*/\s*(?:javascript|ecmascript))",
@@ -444,6 +451,9 @@ PREVIEW_SKIP_TAGS = {
     "col",
     "param",
 }
+PREVIEW_FALLBACK_TAGS = {"iframe", "canvas", "object", "video", "audio"}
+STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style>", re.I | re.S)
+CSS_COMBINATOR = re.compile(r"\s*[>+~]\s*|\s+")
 PREVIEW_MARKER_ATTRS = {"id", "class", "name"}
 PREVIEW_BLOCK_BREAK = {
     "p",
@@ -486,11 +496,11 @@ PREVIEW_BLOCK_BREAK = {
 FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*$")
 HTML_TYPE1_OPEN = re.compile(r"(?i)^ {0,3}<(script|pre|style|textarea)(?:\s|/?>|$)")
-HTML_TYPE1_CLOSE = re.compile(r"(?i)</(script|pre|style|textarea)\s*>")
+HTML_TYPE1_CLOSE = re.compile(r"(?i)</(script|pre|style|textarea)>")
 HTML_UNTIL_OPEN = [
     (re.compile(r"^ {0,3}<!--"), "-->"),
     (re.compile(r"^ {0,3}<\?"), "?>"),
-    (re.compile(r"(?i)^ {0,3}<!\[CDATA\["), "]]>"),
+    (re.compile(r"^ {0,3}<!\[CDATA\["), "]]>"),
     (re.compile(r"^ {0,3}<![A-Za-z]"), ">"),
 ]
 HTML_TYPE7_TAG = re.compile(r"^ {0,3}</?[a-zA-Z][a-zA-Z0-9-]*")
@@ -531,23 +541,29 @@ def _duplicates(items: list[str]) -> list[str]:
     return sorted({item for item in items if items.count(item) > 1})
 
 
+def recipe_body_usable(body: str) -> bool:
+    """True when a recipe names core slots, signature slots, and exclusions."""
+    return bool(RECIPE_SLOT.search(body) and RECIPE_SIG.search(body) and RECIPE_EXCLUDE.search(body))
+
+
 def recipe_entry_ids(section: str) -> set[str]:
     found: set[str] = set()
     for raw in section.splitlines():
         line = raw.strip()
         listed = RECIPE_LIST.match(line)
         if listed:
-            found.add(listed.group(1).lower())
+            if recipe_body_usable(listed.group(2)):
+                found.add(listed.group(1).lower())
             continue
         if line.startswith("|"):
             cells = [cell.strip().strip("`") for cell in line.strip("|").split("|")]
             if cells and re.fullmatch(r"[a-z][a-z0-9_-]*", cells[0], re.I):
                 rest = [cell for cell in cells[1:] if cell and not re.fullmatch(r":?-{3,}:?", cell)]
-                if rest:
+                if rest and recipe_body_usable(" ".join(rest)):
                     found.add(cells[0].lower())
             continue
         plain = RECIPE_PLAIN.match(line)
-        if plain:
+        if plain and recipe_body_usable(plain.group(2)):
             found.add(plain.group(1).lower())
     return found
 
@@ -665,8 +681,11 @@ def is_html_type7_line(raw: str) -> bool:
             return i < n and raw[i] == ">" and raw[i + 1 :].strip() == ""
         if raw[i] in "\"'=<":
             return False
+        name_start = i
         while i < n and raw[i] not in " \t\"'=/<>":
             i += 1
+        if i == name_start or not HTML_ATTR_NAME.fullmatch(raw[name_start:i]):
+            return False
         if i >= n:
             return False
         while i < n and raw[i] in " \t":
@@ -804,7 +823,7 @@ class HtmlBlockScanner:
         self.html_block = False
 
     def _type1_closed(self, raw: str, tag: str) -> bool:
-        return bool(re.search(rf"(?i)</{re.escape(tag)}\s*>", raw))
+        return bool(re.search(rf"(?i)</{re.escape(tag)}>", raw))
 
     def in_block(self, raw: str) -> bool:
         if self.type1:
@@ -871,17 +890,97 @@ def has_preview_marker(haystack: str, ident: str, *prefixes: str) -> bool:
     return False
 
 
+def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, str]]]:
+    """Selectors from <style> whose declarations hide matching elements."""
+    rules: list[tuple[str, dict[str, str]]] = []
+    for block in STYLE_BLOCK.findall(html or ""):
+        css = CSS_COMMENT.sub("", block)
+        for match in re.finditer(r"([^{}]+)\{([^{}]+)\}", css):
+            tokens = winning_style_tokens(match.group(2))
+            hide: dict[str, str] = {}
+            if tokens.get("display") == "none":
+                hide["display"] = "none"
+            if _opacity_is_zero(tokens.get("opacity", "")):
+                hide["opacity"] = "0"
+            vis = tokens.get("visibility")
+            if vis in {"hidden", "collapse"}:
+                hide["visibility"] = vis
+            if not hide:
+                continue
+            for selector in match.group(1).split(","):
+                sel = selector.strip()
+                if sel:
+                    rules.append((sel, hide))
+    return rules
+
+
+def css_selector_matches(selector: str, tag: str, attrs) -> bool:
+    """Match the subject (rightmost compound) of a simple CSS selector."""
+    parts = [part for part in CSS_COMBINATOR.split(selector.strip()) if part]
+    if not parts:
+        return False
+    subject = parts[-1]
+    if ":" in subject:
+        subject = subject.split(":", 1)[0]
+        if not subject:
+            return False
+    if subject == "*":
+        return True
+    ad = {name.lower(): (value or "") for name, value in attrs}
+    i = 0
+    n = len(subject)
+    named = re.match(r"^[a-zA-Z][a-zA-Z0-9-]*", subject)
+    if named:
+        if named.group(0).lower() != tag:
+            return False
+        i = named.end()
+    elif n == 0 or subject[0] not in "#.[":
+        return False
+    while i < n:
+        ch = subject[i]
+        if ch == "#":
+            j = i + 1
+            while j < n and subject[j] not in ".#[":
+                j += 1
+            if ad.get("id") != subject[i + 1 : j]:
+                return False
+            i = j
+        elif ch == ".":
+            j = i + 1
+            while j < n and subject[j] not in ".#[":
+                j += 1
+            if subject[i + 1 : j] not in ad.get("class", "").split():
+                return False
+            i = j
+        elif ch == "[":
+            end = subject.find("]", i)
+            if end == -1:
+                return False
+            inner = subject[i + 1 : end].strip()
+            if "=" in inner:
+                aname, aval = inner.split("=", 1)
+                if ad.get(aname.strip().lower()) != aval.strip().strip("\"'"):
+                    return False
+            elif inner.strip().lower() not in ad:
+                return False
+            i = end + 1
+        else:
+            return False
+    return True
+
+
 class PreviewMarkerCollector(HTMLParser):
     """Collect contiguous visible text and intended attributes; skip hidden subtrees."""
 
-    def __init__(self) -> None:
+    def __init__(self, sheet_hides: list[tuple[str, dict[str, str]]] | None = None) -> None:
         super().__init__(convert_charrefs=True)
-        self.stack: list[tuple[str, bool, bool, bool, bool]] = []
+        self.stack: list[tuple[str, bool, bool, bool, bool, bool]] = []
         self.skip_depth = 0
         self.vis_hidden_stack: list[bool] = []
         self.text_buf: list[str] = []
         self.chunks: list[str] = []
         self.details_stack: list[dict[str, bool]] = []
+        self.sheet_hides = sheet_hides or []
 
     def _flush_text(self) -> None:
         if self.text_buf:
@@ -950,11 +1049,28 @@ class PreviewMarkerCollector(HTMLParser):
                     break
         if incoming not in TABLE_START:
             return
+        if not any(tag == "table" for tag, *_rest in self.stack):
+            return
         while self.stack:
             top = self.stack[-1][0]
             if top in TABLE_CONTEXT:
                 return
             self.handle_endtag(top)
+
+    def _sheet_hide(self, tag: str, attrs) -> tuple[bool, bool, str | None]:
+        display_none = False
+        opacity_zero = False
+        vis: str | None = None
+        for selector, hide in self.sheet_hides:
+            if not css_selector_matches(selector, tag, attrs):
+                continue
+            if hide.get("display") == "none":
+                display_none = True
+            if "opacity" in hide:
+                opacity_zero = True
+            if hide.get("visibility") in {"hidden", "collapse"}:
+                vis = hide["visibility"]
+        return display_none, opacity_zero, vis
 
     def _open(self, tag: str, attrs) -> None:
         ltag = tag.lower()
@@ -963,22 +1079,33 @@ class PreviewMarkerCollector(HTMLParser):
         self._clear_table_stack(ltag)
         hidden = any(name.lower() == "hidden" for name, _ in attrs)
         style = next((value or "" for name, value in attrs if name.lower() == "style"), "")
-        hard = hidden or inline_style_hard_hides(style)
+        inline_tokens = winning_style_tokens(style)
+        sheet_display_none, sheet_opacity_zero, sheet_vis = self._sheet_hide(ltag, attrs)
+        if "display" in inline_tokens:
+            sheet_display_none = inline_tokens["display"] == "none"
+        if "opacity" in inline_tokens:
+            sheet_opacity_zero = _opacity_is_zero(inline_tokens["opacity"])
+        hard = hidden or sheet_display_none or sheet_opacity_zero
         if ltag == "input" and any(value.lower() == "hidden" for value in attr_values(attrs, "type")):
             hard = True
         if ltag == "dialog" and not any(name.lower() == "open" for name, _ in attrs):
             hard = True
         state = self.details_stack[-1] if self.details_stack else None
+        parent_tag = self.stack[-1][0] if self.stack else None
         is_first_summary = (
             ltag == "summary"
             and state is not None
+            and parent_tag == "details"
             and not state["in_summary"]
             and not state["used_summary"]
         )
         hide_for_details = state is not None and not state["in_summary"] and not is_first_summary
         hard = self.skip_depth > 0 or ltag in PREVIEW_SKIP_TAGS or hard or hide_for_details
         parent_vis_hidden = self.vis_hidden_stack[-1] if self.vis_hidden_stack else False
-        own_vis = inline_style_visibility(style)
+        if "visibility" in inline_tokens:
+            own_vis = inline_tokens["visibility"] if inline_tokens["visibility"] in {"hidden", "visible", "collapse"} else None
+        else:
+            own_vis = sheet_vis
         if own_vis in {"hidden", "collapse"}:
             vis_hidden = True
         elif own_vis == "visible":
@@ -997,11 +1124,14 @@ class PreviewMarkerCollector(HTMLParser):
             opened_summary = True
         if opened_closed_details:
             self.details_stack.append({"in_summary": False, "used_summary": False})
-        self.stack.append((ltag, skip, hard, opened_closed_details, opened_summary))
+        fallback = False
         if hard:
             self.skip_depth += 1
-            return
-        if vis_hidden:
+        elif not vis_hidden and ltag in PREVIEW_FALLBACK_TAGS:
+            self.skip_depth += 1
+            fallback = True
+        self.stack.append((ltag, skip, hard, opened_closed_details, opened_summary, fallback))
+        if hard or vis_hidden:
             return
         for name, value in attrs:
             if not value:
@@ -1016,12 +1146,12 @@ class PreviewMarkerCollector(HTMLParser):
             if self.stack[i][0] == ltag:
                 if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
                     self._flush_text()
-                for _, _was_skip, was_hard, opened_closed_details, opened_summary in reversed(self.stack[i:]):
+                for _, _was_skip, was_hard, opened_closed_details, opened_summary, was_fallback in reversed(self.stack[i:]):
                     if opened_summary and self.details_stack:
                         self.details_stack[-1]["in_summary"] = False
                     if opened_closed_details and self.details_stack:
                         self.details_stack.pop()
-                    if was_hard:
+                    if was_hard or was_fallback:
                         self.skip_depth = max(0, self.skip_depth - 1)
                     if self.vis_hidden_stack:
                         self.vis_hidden_stack.pop()
@@ -1040,7 +1170,7 @@ class PreviewMarkerCollector(HTMLParser):
 
 
 def collect_preview_marker_text(preview: str) -> list[str]:
-    collector = PreviewMarkerCollector()
+    collector = PreviewMarkerCollector(extract_stylesheet_hide_rules(preview))
     try:
         collector.feed(preview)
         collector.close()
