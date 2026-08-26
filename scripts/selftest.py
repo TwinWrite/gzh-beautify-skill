@@ -197,7 +197,11 @@ def main() -> int:
     p_err, _, _ = validate_article.validate(pre)
     assert_true(any("pre" in e.lower() or "code" in e.lower() for e in p_err), f"<pre><code> 应失败: {p_err}")
 
-    xss = styled_root(f"{body_p('正文。')}<img src=\"missing\" onerror=\"alert(1)\">")
+    xss = styled_root(
+        f"{body_p('正文。')}"
+        '<img src="missing" onerror="alert(1)" '
+        'style="max-width:100%;height:auto;display:block;margin:0 auto;">'
+    )
     x_err, _, _ = validate_article.validate(xss)
     assert_true(any("事件" in e or "onerror" in e.lower() for e in x_err), f"onerror 应失败: {x_err}")
 
@@ -257,7 +261,8 @@ def main() -> int:
 
     png_named = styled_root(
         '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
-        '<img src="data:image/png;name=diagram.svg.png;base64,iVBORw0KGgo=">'
+        '<img src="data:image/png;name=diagram.svg.png;base64,iVBORw0KGgo=" '
+        'style="max-width:100%;height:auto;display:block;margin:0 auto;">'
         '<span leaf="">图。</span></p>'
     )
     png_err, _, _ = validate_article.validate(png_named)
@@ -279,7 +284,8 @@ def main() -> int:
 
     svg_img = styled_root(
         '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
-        '<img src="data:image/svg+xml;utf8,<svg></svg>">'
+        '<img src="data:image/svg+xml;utf8,<svg></svg>" '
+        'style="max-width:100%;height:auto;display:block;margin:0 auto;">'
         '<span leaf="">图。</span></p>'
     )
     svg_img_err, _, _ = validate_article.validate(svg_img)
@@ -341,6 +347,29 @@ def main() -> int:
     assert_true(
         any("包裹" in e or "leaf" in e.lower() for e in sc_err),
         f"非 void 自闭合 span[leaf] 不应把后续中文算作已包裹: {sc_err}",
+    )
+
+    unstyled_media = styled_root(
+        '<figure style="margin:0">'
+        '<img src="x">'
+        '<figcaption><span leaf="">中文。</span></figcaption>'
+        "</figure>"
+    )
+    um_err, _, _ = validate_article.validate(unstyled_media)
+    assert_true(
+        any("style" in e.lower() and ("img" in e.lower() or "figcaption" in e.lower() or "缺少" in e) for e in um_err),
+        f"无 style 的 img/figcaption 应失败: {um_err}",
+    )
+
+    unstyled_li = styled_root(
+        '<ul style="margin:0 0 16px;padding-left:1.4em;">'
+        '<li><span leaf="">中文。</span></li>'
+        "</ul>"
+    )
+    uli_err, _, _ = validate_article.validate(unstyled_li)
+    assert_true(
+        any("style" in e.lower() and ("li" in e.lower() or "缺少" in e) for e in uli_err),
+        f"无 style 的 li 应失败: {uli_err}",
     )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -532,6 +561,29 @@ def main() -> int:
         vhp_err, _ = lint_theme.lint_theme(vis_hidden_preview, schema)
         assert_has(vhp_err, "slot:footer", "visibility:hidden 的预览标记不算覆盖")
 
+        css_var_preview = Path(tmp) / "css-var-preview-pack"
+        write_mini_theme(css_var_preview)
+        cvp = (css_var_preview / "preview.html").read_text(encoding="utf-8")
+        (css_var_preview / "preview.html").write_text(
+            cvp.replace(
+                "<p>slot:footer</p>",
+                '<p style="--example:display:none">slot:footer</p>',
+            ),
+            encoding="utf-8",
+        )
+        cvp_err, _ = lint_theme.lint_theme(css_var_preview, schema)
+        assert_true(not cvp_err, f"自定义属性里的 display:none 文本不应误判隐藏: {cvp_err}")
+
+        void_hidden_preview = Path(tmp) / "void-hidden-preview-pack"
+        write_mini_theme(void_hidden_preview)
+        vhp2 = (void_hidden_preview / "preview.html").read_text(encoding="utf-8")
+        (void_hidden_preview / "preview.html").write_text(
+            vhp2.replace("<p>slot:footer</p>", '<img hidden><p>slot:footer</p>'),
+            encoding="utf-8",
+        )
+        vhp2_err, _ = lint_theme.lint_theme(void_hidden_preview, schema)
+        assert_true(not vhp2_err, f"hidden 的 void 标签不应把后续可见标记吃掉: {vhp2_err}")
+
         split_preview = Path(tmp) / "split-preview-pack"
         write_mini_theme(split_preview)
         slp = (split_preview / "preview.html").read_text(encoding="utf-8")
@@ -605,6 +657,30 @@ def main() -> int:
             any("缺少章节" in e or "缺少 ### slot:" in e for e in wrapped_err),
             f"HTML 块里的 THEME.md 结构不应算数: {wrapped_err}",
         )
+
+        html_block_fence = Path(tmp) / "html-block-fence-pack"
+        write_mini_theme(html_block_fence)
+        hbf = (html_block_fence / "THEME.md").read_text(encoding="utf-8")
+        hbf = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n<div>\n```html\n<p style=\"font-size:16px;\"><span leaf=\"\">页脚</span></p>\n```\n</div>\n",
+            hbf,
+            count=1,
+            flags=re.S,
+        )
+        (html_block_fence / "THEME.md").write_text(hbf, encoding="utf-8")
+        hbf_err, _ = lint_theme.lint_theme(html_block_fence, schema)
+        assert_true(
+            any("slot:footer" in e and "html" in e for e in hbf_err),
+            f"HTML 块里的围栏不应算作组件实现: {hbf_err}",
+        )
+
+        autolink_md = Path(tmp) / "autolink-md-pack"
+        write_mini_theme(autolink_md)
+        raw_auto = (autolink_md / "THEME.md").read_text(encoding="utf-8")
+        (autolink_md / "THEME.md").write_text(f"<https://example.com>\n\n{raw_auto}", encoding="utf-8")
+        auto_err, _ = lint_theme.lint_theme(autolink_md, schema)
+        assert_true(not auto_err, f"Markdown 自动链接不应吞掉后续结构: {auto_err}")
 
         dup_sig = Path(tmp) / "dup-sig-pack"
         write_mini_theme(dup_sig)

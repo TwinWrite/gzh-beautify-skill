@@ -60,7 +60,25 @@ STYLE_FORBIDDEN = [
     (re.compile(r"white-space\s*:\s*pre", re.I), "white-space:pre 会造成大段空白"),
     (re.compile(r"url\s*\(\s*['\"]?https?://[^)]*\.(woff2?|ttf|otf|eot)", re.I), "外链字体不支持"),
 ]
-BLOCK_NEED_STYLE = {"section", "p", "h1", "h2", "h3", "ul", "ol", "table", "figure", "blockquote", "hr"}
+BLOCK_NEED_STYLE = {
+    "section",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "ul",
+    "ol",
+    "li",
+    "table",
+    "tr",
+    "td",
+    "th",
+    "figure",
+    "figcaption",
+    "img",
+    "blockquote",
+    "hr",
+}
 URL_ATTRS = {
     "href",
     "src",
@@ -345,7 +363,7 @@ def validate(html: str) -> tuple[list[str], list[str], int]:
         errors.append("全文没有 inline style，平台只会保留内联样式")
     elif checker.unstyled_blocks:
         sample = "、".join(f"<{t}>×{n}" for t, n in checker.unstyled_blocks.most_common(5))
-        errors.append(f"{sum(checker.unstyled_blocks.values())} 个块级标签缺少 style（{sample}）")
+        errors.append(f"{sum(checker.unstyled_blocks.values())} 个标签缺少 style（{sample}）")
 
     if checker.leaf_has_block:
         errors.append("span[leaf] 内出现块级标签")

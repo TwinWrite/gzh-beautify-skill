@@ -82,11 +82,18 @@ EXEC_IN_STYLE = re.compile(r"javascript\s*:|expression\s*\(|-moz-binding", re.I)
 SKIP_TAGS = {"head", "title", "style", "script"}
 VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
 CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-DISPLAY_NONE = re.compile(r"display\s*:\s*none\b", re.I)
-VISIBILITY_HIDDEN = re.compile(r"visibility\s*:\s*hidden\b", re.I)
 HTML_ELEMENT = re.compile(r"<[A-Za-z]")
+HTML_TAG_NAME = re.compile(r"^[a-z][a-z0-9-]*$", re.I)
 HTML_COMMENT_OPEN = "<!--"
 HTML_COMMENT_CLOSE = "-->"
+HTML_BLOCK_OPEN = re.compile(
+    r"(?i)^ {0,3}</?(?:address|article|aside|base|basefont|blockquote|body|"
+    r"caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|"
+    r"figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|"
+    r"html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|"
+    r"optgroup|option|p|param|section|source|summary|table|tbody|td|"
+    r"tfoot|th|thead|title|tr|track|ul)(?:\s|/?>|$)"
+)
 URL_ATTRS = {
     "href",
     "src",
@@ -351,9 +358,31 @@ def html_body_has_element(body: str) -> bool:
     return bool(HTML_ELEMENT.search(strip_html_comments(body)))
 
 
-def inline_style_hides(style: str) -> bool:
+def iter_css_declarations(style: str):
     stripped = CSS_COMMENT.sub("", style or "")
-    return bool(DISPLAY_NONE.search(stripped) or VISIBILITY_HIDDEN.search(stripped))
+    for part in stripped.split(";"):
+        piece = part.strip()
+        if ":" not in piece:
+            continue
+        prop, value = piece.split(":", 1)
+        prop, value = prop.strip().lower(), value.strip()
+        if prop and value:
+            yield prop, value
+
+
+def inline_style_hides(style: str) -> bool:
+    for prop, value in iter_css_declarations(style):
+        token = value.split("!", 1)[0].strip().split()[0].lower() if value else ""
+        if prop == "display" and token == "none":
+            return True
+        if prop == "visibility" and token == "hidden":
+            return True
+    return False
+
+
+def is_real_html_tag(tag: str) -> bool:
+    """True for HTML tag names; false for Markdown autolinks like <https://...>."""
+    return bool(HTML_TAG_NAME.match(tag or ""))
 
 
 class VisibleMarkdownCollector(HTMLParser):
@@ -365,11 +394,11 @@ class VisibleMarkdownCollector(HTMLParser):
         self.parts: list[str] = []
 
     def handle_startendtag(self, tag: str, attrs) -> None:
-        if tag.lower() not in VOID_TAGS:
+        if is_real_html_tag(tag) and tag.lower() not in VOID_TAGS:
             self.depth += 1
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        if tag.lower() not in VOID_TAGS:
+        if is_real_html_tag(tag) and tag.lower() not in VOID_TAGS:
             self.depth += 1
 
     def handle_endtag(self, tag: str) -> None:
@@ -427,12 +456,12 @@ class PreviewMarkerCollector(HTMLParser):
             self.text_buf.clear()
 
     def handle_startendtag(self, tag: str, attrs) -> None:
-        self._open(tag, attrs)
-        if tag.lower() in VOID_TAGS:
-            self.handle_endtag(tag)
+        self.handle_starttag(tag, attrs)
 
     def handle_starttag(self, tag: str, attrs) -> None:
         self._open(tag, attrs)
+        if tag.lower() in VOID_TAGS:
+            self.handle_endtag(tag)
 
     def _open(self, tag: str, attrs) -> None:
         ltag = tag.lower()
@@ -495,6 +524,7 @@ def iter_top_level_fences(text: str):
     lines = text.splitlines(keepends=True)
     pos = 0
     opener: tuple[int, str, str] | None = None
+    html_block = False
     for line in lines:
         raw = line.rstrip("\r\n")
         if opener is not None:
@@ -503,6 +533,15 @@ def iter_top_level_fences(text: str):
             if close and close.group(1)[0] == marker[0] and len(close.group(1)) >= len(marker):
                 yield {"start": start, "end": pos + len(line), "marker": marker, "info": info}
                 opener = None
+            pos += len(line)
+            continue
+        if html_block:
+            if not raw.strip():
+                html_block = False
+            pos += len(line)
+            continue
+        if HTML_BLOCK_OPEN.match(raw):
+            html_block = True
             pos += len(line)
             continue
         open_m = FENCE_OPEN.match(raw)
