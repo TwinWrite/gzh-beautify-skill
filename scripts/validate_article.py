@@ -13,8 +13,8 @@ CJK = re.compile(r"[一-鿿㐀-䶿]")
 HALF_PUNCT = re.compile(r"[,;!?:]|[\"']")
 NUMERIC_SEP = re.compile(r"(?<=\d)[,:](?=\d)")
 URL_OR_EMAIL = re.compile(
-    r"(?i)(?:https?://|ftp://|mailto:)[^\s<>\"']+|"
-    r"www\.[^\s<>\"']+|"
+    r"(?i)(?:https?://|ftp://|mailto:)[^\s<>\"'，。！？：；、]+|"
+    r"www\.[^\s<>\"'，。！？：；、]+|"
     r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
 )
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
@@ -121,6 +121,29 @@ P_CLOSING_START = frozenset({
     "table",
     "ul",
 })
+TABLE_START = frozenset({
+    "tr",
+    "td",
+    "th",
+    "thead",
+    "tbody",
+    "tfoot",
+    "caption",
+    "colgroup",
+    "col",
+})
+TABLE_CONTEXT = frozenset({
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "caption",
+    "colgroup",
+    "html",
+    "body",
+    "template",
+})
 BLOCK_NEED_STYLE = {
     "section",
     "p",
@@ -157,6 +180,8 @@ URL_ATTRS = {
 
 ACTIVE_DATA_TOKEN = re.compile(r"(?:html|svg|xml|javascript|ecmascript)", re.I)
 CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+_CSS_HEX = frozenset("0123456789abcdefABCDEF")
+_CSS_ESCAPE_WS = frozenset(" \t\n\r\f")
 RAW_UNSAFE = [
     (re.compile(r"<!\[", re.I), "禁止 CDATA / 不完整声明"),
     (re.compile(r"<script\b", re.I), "<script> 会被过滤"),
@@ -204,11 +229,56 @@ def is_executable_url(value: str) -> bool:
     return False
 
 
+def decode_css_escapes(text: str) -> str:
+    """Decode CSS identifier escapes such as pos\\69 tion → position."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch != "\\" or i + 1 >= n:
+            out.append(ch)
+            i += 1
+            continue
+        nxt = text[i + 1]
+        if nxt in "\n\f" or nxt == "\r":
+            i += 2
+            if nxt == "\r" and i < n and text[i] == "\n":
+                i += 1
+            continue
+        if nxt in _CSS_HEX:
+            j = i + 1
+            hex_chars: list[str] = []
+            while j < n and len(hex_chars) < 6 and text[j] in _CSS_HEX:
+                hex_chars.append(text[j])
+                j += 1
+            if j < n and text[j] in _CSS_ESCAPE_WS:
+                if text[j] == "\r" and j + 1 < n and text[j + 1] == "\n":
+                    j += 2
+                else:
+                    j += 1
+            code = int("".join(hex_chars), 16)
+            if 0 < code <= 0x10FFFF:
+                out.append(chr(code))
+            else:
+                out.append("\ufffd")
+            i = j
+            continue
+        out.append(nxt)
+        i += 2
+    return "".join(out)
+
+
+def normalize_style(style: str) -> str:
+    """Strip CSS comments then decode identifier escapes."""
+    return decode_css_escapes(CSS_COMMENT.sub("", style or ""))
+
+
 def has_css_declaration(style: str) -> bool:
     """True when style has at least one property with a non-empty value."""
     if not style:
         return False
-    stripped = CSS_COMMENT.sub("", style)
+    stripped = normalize_style(style)
     for part in stripped.split(";"):
         piece = part.strip()
         if ":" not in piece:
@@ -292,9 +362,19 @@ class ArticleChecker(HTMLParser):
             if top in targets:
                 return
 
+    def _clear_table_stack(self, incoming: str) -> None:
+        if incoming not in TABLE_START:
+            return
+        while self.stack:
+            top = self.stack[-1][0]
+            if top in TABLE_CONTEXT:
+                return
+            self.handle_endtag(top)
+
     def _open(self, tag: str, attrs, *, void: bool) -> None:
         ltag = tag.lower()
         self._implied_close(ltag)
+        self._clear_table_stack(ltag)
         ad = {k.lower(): v for k, v in attrs}
         styles = attr_values(attrs, "style")
         at_root = not self.stack
@@ -328,7 +408,7 @@ class ArticleChecker(HTMLParser):
             if lname in URL_ATTRS and is_executable_url(value or ""):
                 self.exec_urls.append(lname)
         for style in styles:
-            stripped = CSS_COMMENT.sub("", style)
+            stripped = normalize_style(style)
             normalized = normalize_scheme_text(stripped)
             if stripped and (EXEC_IN_STYLE.search(stripped) or EXEC_IN_STYLE.search(normalized)):
                 self.exec_urls.append("style")
@@ -340,7 +420,7 @@ class ArticleChecker(HTMLParser):
                     self.font_size_hits.append(size)
 
         is_leaf = ltag == "span" and "leaf" in ad
-        is_code = bool(CODE_STYLE.search(CSS_COMMENT.sub("", effective_style)))
+        is_code = bool(CODE_STYLE.search(normalize_style(effective_style)))
         if is_leaf:
             self.span_leaf_count += 1
             self.leaf_depth += 1

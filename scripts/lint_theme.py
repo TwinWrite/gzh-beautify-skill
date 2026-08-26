@@ -72,6 +72,7 @@ PLACEHOLDER = re.compile(r"\{\{[a-z0-9_-]+\}\}", re.I)
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
 PREVIEW_ID_TAIL = re.compile(r"[a-z0-9_-]")
 RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+\.)\s+`?([a-z][a-z0-9_-]*)`?", re.I)
+RECIPE_PLAIN = re.compile(r"^`?([a-z][a-z0-9_-]*)`?\s*[:：]", re.I)
 EXEC_SCHEME = re.compile(
     r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:|"
     r"^\s*data\s*:\s*(?:text\s*/\s*html|text\s*/\s*javascript|application\s*/\s*(?:javascript|ecmascript))",
@@ -82,6 +83,8 @@ EXEC_IN_STYLE = re.compile(r"javascript\s*:|expression\s*\(|-moz-binding", re.I)
 SKIP_TAGS = {"head", "title", "style", "script"}
 VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
 CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+_CSS_HEX = frozenset("0123456789abcdefABCDEF")
+_CSS_ESCAPE_WS = frozenset(" \t\n\r\f")
 HTML_TAG_NAME = re.compile(r"^[a-z][a-z0-9-]*$", re.I)
 HTML_COMMENT_OPEN = "<!--"
 HTML_COMMENT_CLOSE = "-->"
@@ -203,6 +206,29 @@ P_CLOSING_START = frozenset({
     "section",
     "table",
     "ul",
+})
+TABLE_START = frozenset({
+    "tr",
+    "td",
+    "th",
+    "thead",
+    "tbody",
+    "tfoot",
+    "caption",
+    "colgroup",
+    "col",
+})
+TABLE_CONTEXT = frozenset({
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "caption",
+    "colgroup",
+    "html",
+    "body",
+    "template",
 })
 THEME_STYLE_CHECKS = [
     (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "禁止 position fixed/absolute/sticky"),
@@ -370,7 +396,7 @@ HTML_UNTIL_OPEN = [
     (re.compile(r"(?i)^ {0,3}<!\[CDATA\["), "]]>"),
     (re.compile(r"^ {0,3}<![A-Za-z]"), ">"),
 ]
-HTML_TYPE7_LINE = re.compile(r"(?i)^ {0,3}</?[a-z][a-z0-9-]*(?:\s[^<>]*)?\s*/?>\s*$")
+HTML_TYPE7_TAG = re.compile(r"^ {0,3}</?[a-zA-Z][a-zA-Z0-9-]*")
 
 
 def data_uri_media_type(value: str) -> str:
@@ -420,6 +446,10 @@ def recipe_entry_ids(section: str) -> set[str]:
             cells = [cell.strip().strip("`") for cell in line.strip("|").split("|")]
             if cells and re.fullmatch(r"[a-z][a-z0-9_-]*", cells[0], re.I):
                 found.add(cells[0].lower())
+            continue
+        plain = RECIPE_PLAIN.match(line)
+        if plain:
+            found.add(plain.group(1).lower())
     return found
 
 
@@ -465,8 +495,80 @@ class _CompletedTagCounter(HTMLParser):
         self.starts += 1
 
 
+def decode_css_escapes(text: str) -> str:
+    """Decode CSS identifier escapes such as pos\\69 tion → position."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch != "\\" or i + 1 >= n:
+            out.append(ch)
+            i += 1
+            continue
+        nxt = text[i + 1]
+        if nxt in "\n\f" or nxt == "\r":
+            i += 2
+            if nxt == "\r" and i < n and text[i] == "\n":
+                i += 1
+            continue
+        if nxt in _CSS_HEX:
+            j = i + 1
+            hex_chars: list[str] = []
+            while j < n and len(hex_chars) < 6 and text[j] in _CSS_HEX:
+                hex_chars.append(text[j])
+                j += 1
+            if j < n and text[j] in _CSS_ESCAPE_WS:
+                if text[j] == "\r" and j + 1 < n and text[j + 1] == "\n":
+                    j += 2
+                else:
+                    j += 1
+            code = int("".join(hex_chars), 16)
+            if 0 < code <= 0x10FFFF:
+                out.append(chr(code))
+            else:
+                out.append("\ufffd")
+            i = j
+            continue
+        out.append(nxt)
+        i += 2
+    return "".join(out)
+
+
+def normalize_style(style: str) -> str:
+    """Strip CSS comments then decode identifier escapes."""
+    return decode_css_escapes(CSS_COMMENT.sub("", style or ""))
+
+
+def is_html_type7_line(raw: str) -> bool:
+    """True when the line is a complete tag, including quoted '>' in attributes."""
+    match = HTML_TYPE7_TAG.match(raw)
+    if not match:
+        return False
+    i = match.end()
+    n = len(raw)
+    quote = None
+    while i < n:
+        ch = raw[i]
+        if quote:
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+            i += 1
+            continue
+        if ch == "<":
+            return False
+        if ch == ">":
+            return raw[i + 1 :].strip() == ""
+        i += 1
+    return False
+
+
 def iter_css_declarations(style: str):
-    stripped = CSS_COMMENT.sub("", style or "")
+    stripped = normalize_style(style)
     for part in stripped.split(";"):
         piece = part.strip()
         if ":" not in piece:
@@ -557,10 +659,11 @@ class PreviewMarkerCollector(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.stack: list[tuple[str, bool]] = []
+        self.stack: list[tuple[str, bool, bool, bool]] = []
         self.skip_depth = 0
         self.text_buf: list[str] = []
         self.chunks: list[str] = []
+        self.details_stack: list[bool] = []
 
     def _flush_text(self) -> None:
         if self.text_buf:
@@ -575,18 +678,60 @@ class PreviewMarkerCollector(HTMLParser):
         if tag.lower() in VOID_TAGS:
             self.handle_endtag(tag)
 
+    def _implied_close(self, incoming: str) -> None:
+        targets = set(IMPLIED_END_ON_START.get(incoming, ()))
+        if incoming in P_CLOSING_START:
+            targets.add("p")
+        if not targets:
+            return
+        has_target = False
+        for tag, *_rest in reversed(self.stack):
+            if tag in IMPLIED_END_STOP:
+                break
+            if tag in targets:
+                has_target = True
+                break
+        if not has_target:
+            return
+        while self.stack:
+            top = self.stack[-1][0]
+            if top in IMPLIED_END_STOP:
+                return
+            self.handle_endtag(top)
+            if top in targets:
+                return
+
+    def _clear_table_stack(self, incoming: str) -> None:
+        if incoming not in TABLE_START:
+            return
+        while self.stack:
+            top = self.stack[-1][0]
+            if top in TABLE_CONTEXT:
+                return
+            self.handle_endtag(top)
+
     def _open(self, tag: str, attrs) -> None:
         ltag = tag.lower()
+        self._implied_close(ltag)
+        self._clear_table_stack(ltag)
         hidden = any(name.lower() == "hidden" for name, _ in attrs)
         hidden = hidden or any(inline_style_hides(value or "") for name, value in attrs if name.lower() == "style")
         if ltag == "input" and any(value.lower() == "hidden" for value in attr_values(attrs, "type")):
             hidden = True
         if ltag == "dialog" and not any(name.lower() == "open" for name, _ in attrs):
             hidden = True
-        skip = self.skip_depth > 0 or ltag in PREVIEW_SKIP_TAGS or hidden
+        hide_for_details = bool(self.details_stack) and not self.details_stack[-1] and ltag != "summary"
+        skip = self.skip_depth > 0 or ltag in PREVIEW_SKIP_TAGS or hidden or hide_for_details
         if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
             self._flush_text()
-        self.stack.append((ltag, skip))
+        opened_closed_details = ltag == "details" and not any(name.lower() == "open" for name, _ in attrs)
+        opened_summary = False
+        if ltag == "summary" and self.details_stack and not self.details_stack[-1]:
+            self.details_stack[-1] = True
+            opened_summary = True
+        if opened_closed_details:
+            self.details_stack.append(False)
+        self.stack.append((ltag, skip, opened_closed_details, opened_summary))
         if skip:
             self.skip_depth += 1
             return
@@ -603,7 +748,11 @@ class PreviewMarkerCollector(HTMLParser):
             if self.stack[i][0] == ltag:
                 if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
                     self._flush_text()
-                for _, was_skip in self.stack[i:]:
+                for _, was_skip, opened_closed_details, opened_summary in reversed(self.stack[i:]):
+                    if opened_summary and self.details_stack:
+                        self.details_stack[-1] = False
+                    if opened_closed_details and self.details_stack:
+                        self.details_stack.pop()
                     if was_skip:
                         self.skip_depth = max(0, self.skip_depth - 1)
                 del self.stack[i:]
@@ -687,7 +836,7 @@ def iter_top_level_fences(text: str):
         if started_until:
             pos += len(line)
             continue
-        if HTML_BLOCK_OPEN.match(raw) or HTML_TYPE7_LINE.match(raw):
+        if HTML_BLOCK_OPEN.match(raw) or is_html_type7_line(raw):
             html_block = True
             pos += len(line)
             continue
@@ -830,9 +979,19 @@ class ThemeHtmlInspector(HTMLParser):
             if top in targets:
                 return
 
+    def _clear_table_stack(self, incoming: str) -> None:
+        if incoming not in TABLE_START:
+            return
+        while self.stack:
+            top = self.stack[-1][0]
+            if top in TABLE_CONTEXT:
+                return
+            self.handle_endtag(top)
+
     def _open(self, tag: str, attrs, *, void: bool) -> None:
         ltag = tag.lower()
         self._implied_close(ltag)
+        self._clear_table_stack(ltag)
         ad = {k.lower(): v for k, v in attrs}
         if ltag in FORBIDDEN_THEME_TAGS:
             self._add("ERROR", f"{self.label}: {FORBIDDEN_THEME_TAGS[ltag]}")
@@ -853,7 +1012,7 @@ class ThemeHtmlInspector(HTMLParser):
             if lname in URL_ATTRS and is_executable_url(value or ""):
                 self._add("ERROR", f"{self.label}: 禁止可执行 URL")
         for style in attr_values(attrs, "style"):
-            stripped = CSS_COMMENT.sub("", style)
+            stripped = normalize_style(style)
             normalized = SCHEME_IGNORED.sub("", stripped)
             if stripped and (EXEC_IN_STYLE.search(stripped) or EXEC_IN_STYLE.search(normalized)):
                 self._add("ERROR", f"{self.label}: style 含可执行内容")

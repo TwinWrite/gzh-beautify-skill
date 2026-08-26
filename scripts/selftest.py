@@ -229,6 +229,10 @@ def main() -> int:
     _, url_warn, _ = validate_article.validate(url_prose)
     assert_true(not any("半角" in w for w in url_warn), f"正文 URL 不应报半角标点: {url_warn}")
 
+    url_then_prose = styled_root(body_p("参见 https://example.com/path，后文:错误。"))
+    _, url_then_warn, _ = validate_article.validate(url_then_prose)
+    assert_true(any("半角" in w for w in url_then_warn), f"URL 后的中文正文半角冒号应警告: {url_then_warn}")
+
     numeric_prose = styled_root(body_p("会议 12:30 开始，约 1,234 人，比例 16:9。"))
     _, num_warn, _ = validate_article.validate(numeric_prose)
     assert_true(not any("半角" in w for w in num_warn), f"数字字面量中的 ,/: 不应报半角标点: {num_warn}")
@@ -411,6 +415,19 @@ def main() -> int:
         f"blockquote 隐含闭合 p 后中文不应算已包裹: {pq_err}",
     )
 
+    table_foster = styled_root(
+        '<table style="width:100%;border-collapse:collapse;">'
+        '<span leaf="">'
+        '<tr style="font-size:16px;">'
+        '<td style="font-size:16px;padding:8px;">中文。</td>'
+        "</tr></table>"
+    )
+    tf_err, _, _ = validate_article.validate(table_foster)
+    assert_true(
+        any("包裹" in e or "leaf" in e.lower() for e in tf_err),
+        f"table 清栈后单元格中文不应算已包裹: {tf_err}",
+    )
+
     pos_comment = (
         '<section style="position/**/:fixed;max-width:677px;margin:0 auto">'
         f"{body_p('正文。')}</section>"
@@ -419,6 +436,16 @@ def main() -> int:
     assert_true(
         any("position" in e.lower() or "fixed" in e.lower() for e in pc_err),
         f"CSS 注释拆开的 position:fixed 应失败: {pc_err}",
+    )
+
+    pos_escape = (
+        '<section style="pos\\69 tion:fixed;max-width:677px;margin:0 auto">'
+        f"{body_p('正文。')}</section>"
+    )
+    pe_err, _, _ = validate_article.validate(pos_escape)
+    assert_true(
+        any("position" in e.lower() or "fixed" in e.lower() for e in pe_err),
+        f"CSS 转义的 position:fixed 应失败: {pe_err}",
     )
 
     template_wrap = styled_root(
@@ -534,6 +561,15 @@ def main() -> int:
         (named_recipe / "THEME.md").write_text(nrmd, encoding="utf-8")
         named_err, _ = lint_theme.lint_theme(named_recipe, schema)
         assert_has(named_err, "tutorial", "仅提及 tutorial 不算配方")
+
+        plain_recipe = Path(tmp) / "plain-recipe-pack"
+        write_mini_theme(plain_recipe)
+        prd = (plain_recipe / "THEME.md").read_text(encoding="utf-8")
+        for kind in lint_theme.ARTICLE_TYPES:
+            prd = prd.replace(f"- `{kind}`: hero + h2 + paragraph\n", f"{kind}：hero + h2 + paragraph\n")
+        (plain_recipe / "THEME.md").write_text(prd, encoding="utf-8")
+        plain_err, _ = lint_theme.lint_theme(plain_recipe, schema)
+        assert_true(not plain_err, f"普通配方行应通过: {plain_err}")
 
         mention_heading = Path(tmp) / "mention-heading-pack"
         write_mini_theme(mention_heading)
@@ -669,6 +705,32 @@ def main() -> int:
         )
         cdp_err, _ = lint_theme.lint_theme(closed_dialog_preview, schema)
         assert_has(cdp_err, "slot:footer", "未 open 的 dialog 里的标记不算覆盖")
+
+        closed_details_preview = Path(tmp) / "closed-details-preview-pack"
+        write_mini_theme(closed_details_preview)
+        cdt = (closed_details_preview / "preview.html").read_text(encoding="utf-8")
+        (closed_details_preview / "preview.html").write_text(
+            cdt.replace(
+                "<p>slot:footer</p>",
+                "<details><summary>More</summary><p>slot:footer</p></details>",
+            ),
+            encoding="utf-8",
+        )
+        cdt_err, _ = lint_theme.lint_theme(closed_details_preview, schema)
+        assert_has(cdt_err, "slot:footer", "关闭的 details 里非 summary 标记不算覆盖")
+
+        implied_hidden_p_preview = Path(tmp) / "implied-hidden-p-preview-pack"
+        write_mini_theme(implied_hidden_p_preview)
+        ihp = (implied_hidden_p_preview / "preview.html").read_text(encoding="utf-8")
+        (implied_hidden_p_preview / "preview.html").write_text(
+            ihp.replace("<p>slot:footer</p>", "<p hidden>note<p>slot:footer</p>"),
+            encoding="utf-8",
+        )
+        ihp_err, _ = lint_theme.lint_theme(implied_hidden_p_preview, schema)
+        assert_true(
+            not any("slot:footer" in e for e in ihp_err),
+            f"隐含闭合 hidden p 后的可见标记应算覆盖: {ihp_err}",
+        )
 
         split_preview = Path(tmp) / "split-preview-pack"
         write_mini_theme(split_preview)
@@ -858,6 +920,42 @@ def main() -> int:
         assert_true(
             any("slot:footer" in e and "html" in e for e in pif_err),
             f"处理指令块里的围栏不应算实现: {pif_err}",
+        )
+
+        type7_quote_fence = Path(tmp) / "type7-quote-fence-pack"
+        write_mini_theme(type7_quote_fence)
+        t7 = (type7_quote_fence / "THEME.md").read_text(encoding="utf-8")
+        t7 = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n<x-foo title=\">\">\n```html\n<p style=\"font-size:16px;\"><span leaf=\"\">页脚</span></p>\n```\n",
+            t7,
+            count=1,
+            flags=re.S,
+        )
+        (type7_quote_fence / "THEME.md").write_text(t7, encoding="utf-8")
+        t7_err, _ = lint_theme.lint_theme(type7_quote_fence, schema)
+        assert_true(
+            any("slot:footer" in e and "html" in e for e in t7_err),
+            f"type-7 引号内 > 后的围栏不应算实现: {t7_err}",
+        )
+
+        table_foster_comp = lint_theme.lint_html_block(
+            '<table style="width:100%;"><span leaf="">'
+            '<tr style="font-size:16px;"><td style="font-size:16px;">中文。</td></tr></table>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("leaf" in msg or "未包" in msg for _, msg in table_foster_comp),
+            f"组件 table 清栈后中文应失败: {table_foster_comp}",
+        )
+
+        escape_comp = lint_theme.lint_html_block(
+            '<p style="pos\\69 tion:fixed;margin:0;font-size:16px;"><span leaf="">{{footer}}</span></p>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("position" in msg.lower() or "fixed" in msg.lower() for _, msg in escape_comp),
+            f"组件 CSS 转义 position:fixed 应失败: {escape_comp}",
         )
 
         link_comp = lint_theme.lint_html_block(
