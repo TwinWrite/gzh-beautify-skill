@@ -184,6 +184,15 @@ THEME_NEED_STYLE = {
     "h4",
     "h5",
     "h6",
+    "article",
+    "address",
+    "header",
+    "footer",
+    "main",
+    "nav",
+    "dl",
+    "dt",
+    "dd",
 }
 LEAF_BLOCK_TAGS = frozenset({
     "address",
@@ -458,6 +467,9 @@ PREVIEW_SKIP_TAGS = {
     "col",
     "param",
     "datalist",
+    "select",
+    "option",
+    "optgroup",
 }
 PREVIEW_FALLBACK_TAGS = {"iframe", "canvas", "object", "video", "audio"}
 STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style>", re.I | re.S)
@@ -503,7 +515,7 @@ PREVIEW_BLOCK_BREAK = {
 }
 FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*$")
-HTML_TYPE1_OPEN = re.compile(r"(?i)^ {0,3}<(script|pre|style|textarea)(?:\s|/?>|$)")
+HTML_TYPE1_OPEN = re.compile(r"(?i)^ {0,3}<(script|pre|style|textarea)(?:\s|>|$)")
 HTML_TYPE1_CLOSE = re.compile(r"(?i)</(script|pre|style|textarea)>")
 HTML_UNTIL_OPEN = [
     (re.compile(r"^ {0,3}<!--"), "-->"),
@@ -516,6 +528,7 @@ ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
 MD_LIST = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])\s")
 MD_QUOTE = re.compile(r"^ {0,3}>")
 MD_THEMATIC = re.compile(r"^ {0,3}(?:[-*_]){3,}\s*$")
+SETEXT_UNDERLINE = re.compile(r"^ {0,3}(?:=+|-+)\s*$")
 
 
 def is_paragraph_line(raw: str) -> bool:
@@ -527,6 +540,10 @@ def is_paragraph_line(raw: str) -> bool:
     if FENCE_OPEN.match(raw):
         return False
     return True
+
+
+def is_setext_underline(raw: str) -> bool:
+    return bool(SETEXT_UNDERLINE.match(raw))
 
 
 def data_uri_media_type(value: str) -> str:
@@ -857,6 +874,8 @@ class HtmlBlockScanner:
     def _mark_markdown_line(self, raw: str) -> None:
         if not raw.strip():
             self.in_paragraph = False
+        elif self.in_paragraph and is_setext_underline(raw):
+            self.in_paragraph = False
         elif is_paragraph_line(raw):
             self.in_paragraph = True
         else:
@@ -941,37 +960,33 @@ def has_preview_marker(haystack: str, ident: str, *prefixes: str) -> bool:
 
 
 def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[str, bool]]]]:
-    """Selectors from <style> whose declarations hide matching elements."""
+    """Selectors from <style> with display/opacity/visibility declarations (hiding or not)."""
     rules: list[tuple[str, dict[str, tuple[str, bool]]]] = []
     for block in STYLE_BLOCK.findall(html or ""):
         css = CSS_COMMENT.sub("", block)
         for match in re.finditer(r"([^{}]+)\{([^{}]+)\}", css):
             decls = winning_style_decls(match.group(2))
-            hide: dict[str, tuple[str, bool]] = {}
-            disp, disp_imp = decls.get("display", ("", False))
-            if disp == "none":
-                hide["display"] = ("none", disp_imp)
-            opac, opac_imp = decls.get("opacity", ("", False))
-            if _opacity_is_zero(opac):
-                hide["opacity"] = ("0", opac_imp)
-            vis, vis_imp = decls.get("visibility", ("", False))
-            if vis in {"hidden", "collapse"}:
-                hide["visibility"] = (vis, vis_imp)
-            if not hide:
+            tracked: dict[str, tuple[str, bool]] = {}
+            for prop in ("display", "opacity", "visibility"):
+                if prop in decls:
+                    tracked[prop] = decls[prop]
+            if not tracked:
                 continue
             for selector in match.group(1).split(","):
                 sel = selector.strip()
                 if sel:
-                    rules.append((sel, hide))
+                    rules.append((sel, tracked))
     return rules
 
 
-def css_subject(selector: str) -> str:
-    """Rightmost compound selector; do not split inside [], quotes, or ()."""
+def split_selector_chain(selector: str) -> list[tuple[str, str]]:
+    """[(combinator, compound), ...] from left to right. First combinator is ''."""
     depth_brack = 0
     depth_paren = 0
     quote = None
-    last_start = 0
+    parts: list[tuple[str, str]] = []
+    comb = ""
+    start = 0
     i = 0
     n = len(selector)
     while i < n:
@@ -998,21 +1013,39 @@ def css_subject(selector: str) -> str:
             depth_paren -= 1
         elif depth_brack == 0 and depth_paren == 0:
             if ch in ">+~":
+                compound = selector[start:i].strip()
+                if compound:
+                    parts.append((comb, compound))
+                nxt = ch
                 i += 1
                 while i < n and selector[i] in " \t":
                     i += 1
-                last_start = i
+                comb = nxt
+                start = i
                 continue
             if ch in " \t":
                 j = i
                 while j < n and selector[j] in " \t":
                     j += 1
                 if j < n and selector[j] not in ">+~":
-                    last_start = j
+                    compound = selector[start:i].strip()
+                    if compound:
+                        parts.append((comb, compound))
+                    comb = " "
+                    start = j
                 i = j
                 continue
         i += 1
-    return selector[last_start:].strip()
+    compound = selector[start:].strip()
+    if compound:
+        parts.append((comb, compound))
+    return parts
+
+
+def css_subject(selector: str) -> str:
+    """Rightmost compound selector; do not split inside [], quotes, or ()."""
+    chain = split_selector_chain(selector)
+    return chain[-1][1] if chain else ""
 
 
 def strip_css_pseudos(subject: str) -> str:
@@ -1036,9 +1069,56 @@ def strip_css_pseudos(subject: str) -> str:
     return subject
 
 
-def css_selector_matches(selector: str, tag: str, attrs) -> bool:
-    """Match the subject (rightmost compound) of a simple CSS selector."""
-    subject = strip_css_pseudos(css_subject(selector))
+def css_specificity(selector: str) -> tuple[int, int, int]:
+    ids = 0
+    classes = 0
+    types = 0
+    for _comb, compound in split_selector_chain(selector):
+        subject = strip_css_pseudos(compound)
+        i = 0
+        n = len(subject)
+        named = re.match(r"^[a-zA-Z][a-zA-Z0-9-]*", subject)
+        if named:
+            types += 1
+            i = named.end()
+        elif n and subject[0] == "*":
+            i = 1
+        while i < n:
+            ch = subject[i]
+            if ch == "#":
+                ids += 1
+                i += 1
+                while i < n and subject[i] not in ".#[":
+                    i += 1
+            elif ch == ".":
+                classes += 1
+                i += 1
+                while i < n and subject[i] not in ".#[":
+                    i += 1
+            elif ch == "[":
+                classes += 1
+                j = i + 1
+                quote = None
+                while j < n:
+                    cj = subject[j]
+                    if quote:
+                        if cj == quote:
+                            quote = None
+                        j += 1
+                        continue
+                    if cj in "\"'":
+                        quote = cj
+                    elif cj == "]":
+                        break
+                    j += 1
+                i = j + 1 if j < n else n
+            else:
+                i += 1
+    return ids, classes, types
+
+
+def css_compound_matches(compound: str, tag: str, attrs) -> bool:
+    subject = strip_css_pseudos(compound)
     if not subject:
         return False
     if subject == "*":
@@ -1104,6 +1184,71 @@ def css_selector_matches(selector: str, tag: str, attrs) -> bool:
     return True
 
 
+def _css_match_chain(
+    compounds: list[str],
+    combs: list[str],
+    tag: str,
+    attrs,
+    ancestors: list[tuple[str, object, list]],
+    prev_siblings: list[tuple[str, object]],
+) -> bool:
+    if not compounds:
+        return False
+    if not css_compound_matches(compounds[-1], tag, attrs):
+        return False
+    if len(compounds) == 1:
+        return True
+    comb = combs[-1]
+    left_compounds = compounds[:-1]
+    left_combs = combs[:-1]
+    if comb == ">":
+        if not ancestors:
+            return False
+        ptag, pattrs, pprev = ancestors[-1]
+        return _css_match_chain(left_compounds, left_combs, ptag, pattrs, ancestors[:-1], pprev)
+    if comb == " ":
+        for j in range(len(ancestors) - 1, -1, -1):
+            atag, aattrs, aprev = ancestors[j]
+            if _css_match_chain(left_compounds, left_combs, atag, aattrs, ancestors[:j], aprev):
+                return True
+        return False
+    if comb == "+":
+        if not prev_siblings:
+            return False
+        stag, sattrs = prev_siblings[-1]
+        return _css_match_chain(left_compounds, left_combs, stag, sattrs, ancestors, prev_siblings[:-1])
+    if comb == "~":
+        for j in range(len(prev_siblings) - 1, -1, -1):
+            stag, sattrs = prev_siblings[j]
+            if _css_match_chain(left_compounds, left_combs, stag, sattrs, ancestors, prev_siblings[:j]):
+                return True
+        return False
+    return False
+
+
+def css_selector_matches(
+    selector: str,
+    tag: str,
+    attrs,
+    ancestors: list[tuple[str, object, list]] | None = None,
+    prev_siblings: list[tuple[str, object]] | None = None,
+) -> bool:
+    """Match a simple CSS selector against the current element and its ancestors."""
+    chain = split_selector_chain(selector)
+    if not chain:
+        return False
+    compounds = [part[1] for part in chain]
+    combs = [part[0] for part in chain[1:]]
+    return _css_match_chain(
+        compounds,
+        combs,
+        tag,
+        attrs,
+        list(ancestors or []),
+        list(prev_siblings or []),
+    )
+
+
 class PreviewMarkerCollector(HTMLParser):
     """Collect contiguous visible text and intended attributes; skip hidden subtrees."""
 
@@ -1116,6 +1261,8 @@ class PreviewMarkerCollector(HTMLParser):
         self.chunks: list[str] = []
         self.details_stack: list[dict[str, bool]] = []
         self.sheet_hides = sheet_hides or []
+        self.dom_open: list[tuple[str, object, list]] = []
+        self.level_children: list[list[tuple[str, object]]] = [[]]
 
     def _flush_text(self) -> None:
         if self.text_buf:
@@ -1193,25 +1340,29 @@ class PreviewMarkerCollector(HTMLParser):
             self.handle_endtag(top)
 
     def _sheet_hide(self, tag: str, attrs) -> tuple[bool, bool, bool, bool, str | None, bool]:
-        display_none = False
-        display_imp = False
-        opacity_zero = False
-        opacity_imp = False
-        vis: str | None = None
-        vis_imp = False
-        for selector, hide in self.sheet_hides:
-            if not css_selector_matches(selector, tag, attrs):
+        ancestors = list(self.dom_open)
+        prev_siblings = list(self.level_children[-1])
+        winning: dict[str, tuple[str, bool, tuple[int, int, int], int]] = {}
+        for order, (selector, decls) in enumerate(self.sheet_hides):
+            if not css_selector_matches(selector, tag, attrs, ancestors, prev_siblings):
                 continue
-            if "display" in hide:
-                display_none = True
-                display_imp = hide["display"][1]
-            if "opacity" in hide:
-                opacity_zero = True
-                opacity_imp = hide["opacity"][1]
-            if hide.get("visibility", ("", False))[0] in {"hidden", "collapse"}:
-                vis = hide["visibility"][0]
-                vis_imp = hide["visibility"][1]
-        return display_none, display_imp, opacity_zero, opacity_imp, vis, vis_imp
+            spec = css_specificity(selector)
+            for prop, (token, imp) in decls.items():
+                prev = winning.get(prop)
+                if prev is None:
+                    winning[prop] = (token, imp, spec, order)
+                    continue
+                _tok, p_imp, p_spec, p_ord = prev
+                if imp != p_imp:
+                    if imp:
+                        winning[prop] = (token, imp, spec, order)
+                elif spec > p_spec or (spec == p_spec and order >= p_ord):
+                    winning[prop] = (token, imp, spec, order)
+        disp, disp_imp = winning.get("display", ("", False, (0, 0, 0), -1))[:2]
+        opac, opac_imp = winning.get("opacity", ("", False, (0, 0, 0), -1))[:2]
+        vis_tok, vis_imp = winning.get("visibility", ("", False, (0, 0, 0), -1))[:2]
+        vis = vis_tok if vis_tok in {"hidden", "collapse", "visible"} else None
+        return disp == "none", disp_imp, _opacity_is_zero(opac), opac_imp, vis, vis_imp
 
     def _open(self, tag: str, attrs) -> None:
         ltag = tag.lower()
@@ -1285,6 +1436,10 @@ class PreviewMarkerCollector(HTMLParser):
             self.skip_depth += 1
             fallback = True
         self.stack.append((ltag, skip, hard, opened_closed_details, opened_summary, fallback))
+        prev = list(self.level_children[-1])
+        self.level_children[-1].append((ltag, attrs))
+        self.dom_open.append((ltag, attrs, prev))
+        self.level_children.append([])
         if hard or vis_hidden:
             return
         for name, value in attrs:
@@ -1309,6 +1464,10 @@ class PreviewMarkerCollector(HTMLParser):
                         self.skip_depth = max(0, self.skip_depth - 1)
                     if self.vis_hidden_stack:
                         self.vis_hidden_stack.pop()
+                    if self.dom_open:
+                        self.dom_open.pop()
+                    if len(self.level_children) > 1:
+                        self.level_children.pop()
                 del self.stack[i:]
                 break
 
@@ -1388,6 +1547,20 @@ def _in_spans(pos: int, spans: list[tuple[int, int]]) -> bool:
     return any(start <= pos < end for start, end in spans)
 
 
+def html_block_line_starts(text: str) -> set[int]:
+    """Start offsets of unfenced lines consumed by CommonMark HTML blocks."""
+    spans = unfenced_spans(text)
+    scanner = HtmlBlockScanner()
+    blocked: set[int] = set()
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        raw = line.rstrip("\r\n")
+        if _in_spans(pos, spans) and scanner.in_block(raw):
+            blocked.add(pos)
+        pos += len(line)
+    return blocked
+
+
 def unfenced_markdown(text: str) -> str:
     pieces: list[str] = []
     last = 0
@@ -1436,13 +1609,12 @@ def _md_section(md_text: str, heading: str) -> str | None:
 
 
 def iter_component_regions(md_text: str):
-    structure = visible_structure_markdown(md_text)
     spans = unfenced_spans(md_text)
+    html_lines = html_block_line_starts(md_text)
     for match in COMPONENT_HEADING.finditer(md_text):
         if not _in_spans(match.start(), spans):
             continue
-        heading_line = match.group(0).strip()
-        if not _has_heading_line(structure, heading_line):
+        if match.start() in html_lines:
             continue
         region_start = match.end()
         nxt = None
@@ -1597,6 +1769,13 @@ class ThemeHtmlInspector(HTMLParser):
                         self.leaf_depth -= 1
                 del self.stack[i:]
                 break
+        if not matched and ltag == "p":
+            self._open("p", [], void=False)
+            self.handle_endtag("p")
+            return
+        if not matched and ltag == "br":
+            self._open("br", [], void=True)
+            return
         if not matched and ltag in FORBIDDEN_THEME_TAGS:
             self._add("ERROR", f"{self.label}: {FORBIDDEN_THEME_TAGS[ltag]}")
 

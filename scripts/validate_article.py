@@ -203,6 +203,15 @@ BLOCK_NEED_STYLE = {
     "h4",
     "h5",
     "h6",
+    "article",
+    "address",
+    "header",
+    "footer",
+    "main",
+    "nav",
+    "dl",
+    "dt",
+    "dd",
 }
 LEAF_BLOCK_TAGS = frozenset({
     "address",

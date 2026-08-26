@@ -397,6 +397,13 @@ def main() -> int:
         f"</h2> 应闭合 h1，二。须未包裹: {mh_err}",
     )
 
+    unstyled_article = styled_root('<article><span leaf="">中文。</span></article>')
+    ua_err, _, _ = validate_article.validate(unstyled_article)
+    assert_true(
+        any("style" in e.lower() and ("article" in e.lower() or "缺少" in e) for e in ua_err),
+        f"无 style 的 article 应失败: {ua_err}",
+    )
+
     legacy_image = styled_root(
         '<image style="font-family:monospace;max-width:100%;height:auto;display:block;">'
         + body_p('他说"你好"。')
@@ -1114,6 +1121,53 @@ def main() -> int:
         ims_err, _ = lint_theme.lint_theme(important_sheet, schema)
         assert_has(ims_err, "slot:footer", "样式表 !important 应压过 inline display:block")
 
+        later_visible_sheet = Path(tmp) / "later-visible-sheet-pack"
+        write_mini_theme(later_visible_sheet)
+        lvs = (later_visible_sheet / "preview.html").read_text(encoding="utf-8")
+        lvs = lvs.replace(
+            "</head>",
+            "<style>#footer{display:none}#footer{display:block}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (later_visible_sheet / "preview.html").write_text(lvs, encoding="utf-8")
+        lvs_err, _ = lint_theme.lint_theme(later_visible_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in lvs_err),
+            f"后出现的 display:block 应覆盖先前的 display:none: {lvs_err}",
+        )
+
+        descendant_sheet = Path(tmp) / "descendant-sheet-pack"
+        write_mini_theme(descendant_sheet)
+        dcs = (descendant_sheet / "preview.html").read_text(encoding="utf-8")
+        dcs = dcs.replace(
+            "</head>",
+            "<style>.hidden #footer{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (descendant_sheet / "preview.html").write_text(dcs, encoding="utf-8")
+        dcs_err, _ = lint_theme.lint_theme(descendant_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in dcs_err),
+            f"无 .hidden 祖先时 .hidden #footer 不应隐藏标记: {dcs_err}",
+        )
+
+        select_option_preview = Path(tmp) / "select-option-preview-pack"
+        write_mini_theme(select_option_preview)
+        sop = (select_option_preview / "preview.html").read_text(encoding="utf-8")
+        (select_option_preview / "preview.html").write_text(
+            sop.replace(
+                "<p>slot:footer</p>",
+                '<select><option>可见</option><option data-slot="slot:footer">Footer</option></select>',
+            ),
+            encoding="utf-8",
+        )
+        sop_err, _ = lint_theme.lint_theme(select_option_preview, schema)
+        assert_has(sop_err, "slot:footer", "未选中的 option 不算预览覆盖")
+
         tbody_preview = Path(tmp) / "tbody-preview-pack"
         write_mini_theme(tbody_preview)
         tbp = (tbody_preview / "preview.html").read_text(encoding="utf-8")
@@ -1340,6 +1394,25 @@ def main() -> int:
         t7p_err, _ = lint_theme.lint_theme(type7_in_para, schema)
         assert_true(not t7p_err, f"段落中的 type-7 标签不应吞掉后续标题: {t7p_err}")
 
+        setext_type7 = Path(tmp) / "setext-type7-pack"
+        write_mini_theme(setext_type7)
+        stx = (setext_type7 / "THEME.md").read_text(encoding="utf-8")
+        stx = stx.replace("## 结构模型\n", "前言\n=====\n<x>\n## 结构模型\n")
+        (setext_type7 / "THEME.md").write_text(stx, encoding="utf-8")
+        stx_err, _ = lint_theme.lint_theme(setext_type7, schema)
+        assert_true(
+            any("结构模型" in e for e in stx_err),
+            f"setext 后的 type-7 应吞掉后续标题: {stx_err}",
+        )
+
+        type1_selfclose = Path(tmp) / "type1-selfclose-pack"
+        write_mini_theme(type1_selfclose)
+        t1sc = (type1_selfclose / "THEME.md").read_text(encoding="utf-8")
+        t1sc = t1sc.replace("## 结构模型\n", "<script/>\n\n## 结构模型\n")
+        (type1_selfclose / "THEME.md").write_text(t1sc, encoding="utf-8")
+        t1sc_err, _ = lint_theme.lint_theme(type1_selfclose, schema)
+        assert_true(not t1sc_err, f"<script/> 不应按 type-1 吞到文件末尾: {t1sc_err}")
+
         search_block = Path(tmp) / "search-block-pack"
         write_mini_theme(search_block)
         seb = (search_block / "THEME.md").read_text(encoding="utf-8")
@@ -1363,6 +1436,17 @@ def main() -> int:
         assert_true(
             not any("slot:bogus" in e for e in hsh_err),
             f"HTML 块里的 ### slot: 不应当成组件标题: {hsh_err}",
+        )
+
+        dup_visible_slot = Path(tmp) / "dup-visible-slot-pack"
+        write_mini_theme(dup_visible_slot)
+        dvs = (dup_visible_slot / "THEME.md").read_text(encoding="utf-8")
+        dvs = dvs.replace("### slot:hero\n", "<div>\n### slot:root\n</div>\n\n### slot:hero\n")
+        (dup_visible_slot / "THEME.md").write_text(dvs, encoding="utf-8")
+        dvs_err, _ = lint_theme.lint_theme(dup_visible_slot, schema)
+        assert_true(
+            not any("slot:root" in e and "html" in e for e in dvs_err),
+            f"HTML 块里重复的 ### slot:root 不应另建组件区域: {dvs_err}",
         )
 
         type1_mismatch = Path(tmp) / "type1-mismatch-pack"
@@ -1622,6 +1706,24 @@ def main() -> int:
         assert_true(
             any("包裹" in msg or "leaf" in msg.lower() for _, msg in mismatch_h_comp),
             f"主题 HTML 中 </h2> 应闭合 h1: {mismatch_h_comp}",
+        )
+
+        stray_p_comp = lint_theme.lint_html_block(
+            '<p style="margin:0;font-size:16px;"><span leaf="">{{footer}}</span></p></p>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("style" in msg.lower() and ("p" in msg.lower() or "缺少" in msg) for _, msg in stray_p_comp),
+            f"游离 </p> 插入的空段落应缺 style: {stray_p_comp}",
+        )
+
+        unstyled_article_comp = lint_theme.lint_html_block(
+            '<article><span leaf="">中文。</span></article>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("style" in msg.lower() and ("article" in msg.lower() or "缺少" in msg) for _, msg in unstyled_article_comp),
+            f"组件无 style 的 article 应失败: {unstyled_article_comp}",
         )
 
         hyphen_ph = lint_theme.lint_html_block(
