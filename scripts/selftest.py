@@ -319,6 +319,16 @@ def main() -> int:
     w_err, _, _ = validate_article.validate(wrapped_doc)
     assert_true(any("html" in e.lower() or "body" in e.lower() or "片段" in e for e in w_err), f"完整文档应失败: {w_err}")
 
+    meta_refresh = styled_root(
+        f'{body_p("正文。")}<meta http-equiv="refresh" content="0;url=https://attacker.example">'
+    )
+    meta_err, _, _ = validate_article.validate(meta_refresh)
+    assert_true(any("meta" in e.lower() for e in meta_err), f"<meta> 应失败: {meta_err}")
+
+    stray_div = styled_root(f"{body_p('正文。')}</div>")
+    stray_err, _, _ = validate_article.validate(stray_div)
+    assert_true(any("div" in e.lower() for e in stray_err), f"游离 </div> 应失败: {stray_err}")
+
     p_root = body_p("正文。")
     pr_err, _, _ = validate_article.validate(p_root)
     assert_true(any("section" in e for e in pr_err), f"非 section 根节点应失败: {pr_err}")
@@ -468,6 +478,46 @@ def main() -> int:
         )
         sp_err, _ = lint_theme.lint_theme(script_preview, schema)
         assert_has(sp_err, "slot:footer", "script 字符串里的预览标记不算覆盖")
+
+        template_preview = Path(tmp) / "template-preview-pack"
+        write_mini_theme(template_preview)
+        tp = (template_preview / "preview.html").read_text(encoding="utf-8")
+        (template_preview / "preview.html").write_text(
+            tp.replace("<p>slot:footer</p>", "<template><p>slot:footer</p></template>"),
+            encoding="utf-8",
+        )
+        tp_err, _ = lint_theme.lint_theme(template_preview, schema)
+        assert_has(tp_err, "slot:footer", "template 里的预览标记不算覆盖")
+
+        hidden_preview = Path(tmp) / "hidden-preview-pack"
+        write_mini_theme(hidden_preview)
+        hp = (hidden_preview / "preview.html").read_text(encoding="utf-8")
+        (hidden_preview / "preview.html").write_text(
+            hp.replace("<p>slot:footer</p>", '<p hidden>slot:footer</p>'),
+            encoding="utf-8",
+        )
+        hp_err, _ = lint_theme.lint_theme(hidden_preview, schema)
+        assert_has(hp_err, "slot:footer", "hidden 子树里的预览标记不算覆盖")
+
+        split_preview = Path(tmp) / "split-preview-pack"
+        write_mini_theme(split_preview)
+        slp = (split_preview / "preview.html").read_text(encoding="utf-8")
+        (split_preview / "preview.html").write_text(
+            slp.replace("<p>slot:footer</p>", "<p><span>slot:</span><strong>footer</strong></p>"),
+            encoding="utf-8",
+        )
+        slp_err, _ = lint_theme.lint_theme(split_preview, schema)
+        assert_true(not slp_err, f"拆开的可见标记应算覆盖: {slp_err}")
+
+        fenced_md = Path(tmp) / "fenced-md-pack"
+        write_mini_theme(fenced_md)
+        raw_md = (fenced_md / "THEME.md").read_text(encoding="utf-8")
+        (fenced_md / "THEME.md").write_text(f"````markdown\n{raw_md}\n````\n", encoding="utf-8")
+        fenced_err, _ = lint_theme.lint_theme(fenced_md, schema)
+        assert_true(
+            any("缺少章节" in e or "缺少 ### slot:" in e for e in fenced_err),
+            f"围栏内的 THEME.md 结构不应算数: {fenced_err}",
+        )
 
         dup_sig = Path(tmp) / "dup-sig-pack"
         write_mini_theme(dup_sig)

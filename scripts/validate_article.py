@@ -47,6 +47,7 @@ FORBIDDEN_TAGS = {
     "embed": "出现禁止标签",
     "pre": "禁止 <pre>/<code>，代码块须逐行 <p>",
     "code": "禁止 <pre>/<code>，代码块须逐行 <p>",
+    "meta": "禁止 <meta>，正文须为可粘贴片段",
 }
 STYLE_FORBIDDEN = [
     (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "position fixed/absolute/sticky 不支持"),
@@ -83,6 +84,8 @@ RAW_UNSAFE = [
     (re.compile(r"<object\b", re.I), "出现禁止标签"),
     (re.compile(r"<embed\b", re.I), "出现禁止标签"),
     (re.compile(r"<iframe\b", re.I), "出现禁止标签"),
+    (re.compile(r"<meta\b", re.I), "禁止 <meta>，正文须为可粘贴片段"),
+    (re.compile(r"</div\b", re.I), "<div> 会被改写，请用 <section>"),
 ]
 
 
@@ -236,8 +239,10 @@ class ArticleChecker(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         ltag = tag.lower()
+        matched = False
         for i in range(len(self.stack) - 1, -1, -1):
             if self.stack[i][0] == ltag:
+                matched = True
                 for _, was_leaf, was_code in self.stack[i:]:
                     if was_leaf:
                         self.leaf_depth -= 1
@@ -245,6 +250,8 @@ class ArticleChecker(HTMLParser):
                         self.code_depth -= 1
                 del self.stack[i:]
                 break
+        if not matched and ltag in FORBIDDEN_TAGS:
+            self.tag_hits[ltag] += 1
 
     def handle_data(self, data: str) -> None:
         if not self.stack:

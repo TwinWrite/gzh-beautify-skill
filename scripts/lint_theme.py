@@ -110,6 +110,7 @@ FORBIDDEN_THEME_TAGS = {
     "embed": "出现禁止标签",
     "pre": "禁止 <pre>/<code>，代码块请逐行 <p>",
     "code": "禁止 <pre>/<code>，代码块请逐行 <p>",
+    "meta": "出现禁止标签",
 }
 THEME_STYLE_CHECKS = [
     (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "禁止 position fixed/absolute/sticky"),
@@ -227,8 +228,48 @@ def find_theme_dirs(target: Path) -> list[Path]:
 
 
 ACTIVE_DATA_TOKEN = re.compile(r"(?:html|svg|xml|javascript|ecmascript)", re.I)
-PREVIEW_SKIP_TAGS = {"head", "title", "style", "script", "noscript"}
+PREVIEW_SKIP_TAGS = {"head", "title", "style", "script", "noscript", "template"}
 PREVIEW_MARKER_ATTRS = {"id", "class", "name"}
+PREVIEW_BLOCK_BREAK = {
+    "p",
+    "section",
+    "div",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "li",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "td",
+    "th",
+    "blockquote",
+    "figure",
+    "figcaption",
+    "hr",
+    "br",
+    "pre",
+    "header",
+    "footer",
+    "article",
+    "aside",
+    "nav",
+    "main",
+    "body",
+    "html",
+    "address",
+    "dl",
+    "dt",
+    "dd",
+}
+FENCE_OPEN = re.compile(r"^ {0,3}([`~]{3,})(.*)$")
+FENCE_CLOSE = re.compile(r"^ {0,3}([`~]{3,})\s*$")
 
 
 def data_uri_media_type(value: str) -> str:
@@ -297,12 +338,19 @@ def has_preview_marker(haystack: str, ident: str, *prefixes: str) -> bool:
 
 
 class PreviewMarkerCollector(HTMLParser):
-    """Collect visible text and intended attributes; skip comments/script/style."""
+    """Collect contiguous visible text and intended attributes; skip hidden subtrees."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.stack: list[str] = []
+        self.stack: list[tuple[str, bool]] = []
+        self.skip_depth = 0
+        self.text_buf: list[str] = []
         self.chunks: list[str] = []
+
+    def _flush_text(self) -> None:
+        if self.text_buf:
+            self.chunks.append("".join(self.text_buf))
+            self.text_buf.clear()
 
     def handle_startendtag(self, tag: str, attrs) -> None:
         self._open(tag, attrs)
@@ -313,8 +361,13 @@ class PreviewMarkerCollector(HTMLParser):
 
     def _open(self, tag: str, attrs) -> None:
         ltag = tag.lower()
-        self.stack.append(ltag)
-        if any(t in PREVIEW_SKIP_TAGS for t in self.stack):
+        hidden = any(name.lower() == "hidden" for name, _ in attrs)
+        skip = self.skip_depth > 0 or ltag in PREVIEW_SKIP_TAGS or hidden
+        if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
+            self._flush_text()
+        self.stack.append((ltag, skip))
+        if skip:
+            self.skip_depth += 1
             return
         for name, value in attrs:
             if not value:
@@ -326,16 +379,19 @@ class PreviewMarkerCollector(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         ltag = tag.lower()
         for i in range(len(self.stack) - 1, -1, -1):
-            if self.stack[i] == ltag:
+            if self.stack[i][0] == ltag:
+                if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
+                    self._flush_text()
+                for _, was_skip in self.stack[i:]:
+                    if was_skip:
+                        self.skip_depth = max(0, self.skip_depth - 1)
                 del self.stack[i:]
                 break
 
     def handle_data(self, data: str) -> None:
-        if any(t in PREVIEW_SKIP_TAGS for t in self.stack):
+        if self.skip_depth:
             return
-        text = data.strip()
-        if text:
-            self.chunks.append(text)
+        self.text_buf.append(data)
 
     def handle_comment(self, _data: str) -> None:
         return
@@ -348,6 +404,7 @@ def collect_preview_marker_text(preview: str) -> list[str]:
         collector.close()
     except Exception:  # noqa: BLE001
         return []
+    collector._flush_text()
     return collector.chunks
 
 
@@ -356,6 +413,77 @@ def preview_shows_marker(preview: str, ident: str, *prefixes: str) -> bool:
         if has_preview_marker(chunk, ident, *prefixes):
             return True
     return False
+
+
+def iter_top_level_fences(text: str):
+    lines = text.splitlines(keepends=True)
+    pos = 0
+    opener: tuple[int, str, str] | None = None
+    for line in lines:
+        raw = line.rstrip("\r\n")
+        if opener is not None:
+            start, marker, info = opener
+            close = FENCE_CLOSE.match(raw)
+            if close and close.group(1)[0] == marker[0] and len(close.group(1)) >= len(marker):
+                yield {"start": start, "end": pos + len(line), "marker": marker, "info": info}
+                opener = None
+            pos += len(line)
+            continue
+        open_m = FENCE_OPEN.match(raw)
+        if open_m:
+            opener = (pos, open_m.group(1), open_m.group(2).strip())
+        pos += len(line)
+    if opener is not None:
+        start, marker, info = opener
+        yield {"start": start, "end": len(text), "marker": marker, "info": info}
+
+
+def unfenced_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    last = 0
+    for fence in iter_top_level_fences(text):
+        if last < fence["start"]:
+            spans.append((last, fence["start"]))
+        last = fence["end"]
+    if last < len(text):
+        spans.append((last, len(text)))
+    return spans
+
+
+def _in_spans(pos: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in spans)
+
+
+def unfenced_markdown(text: str) -> str:
+    pieces: list[str] = []
+    last = 0
+    for fence in iter_top_level_fences(text):
+        pieces.append(text[last : fence["start"]])
+        pieces.append("\n")
+        last = fence["end"]
+    pieces.append(text[last:])
+    return "".join(pieces)
+
+
+def fence_inner_html(text: str, fence: dict) -> str:
+    chunk = text[fence["start"] : fence["end"]]
+    lines = chunk.splitlines(keepends=True)
+    if len(lines) < 2:
+        return ""
+    closer = FENCE_CLOSE.match(lines[-1].rstrip("\r\n"))
+    inner = lines[1:-1] if closer else lines[1:]
+    return "".join(inner)
+
+
+def html_fence_bodies(text: str, start: int, end: int) -> list[str]:
+    bodies: list[str] = []
+    for fence in iter_top_level_fences(text):
+        if fence["start"] < start or fence["end"] > end:
+            continue
+        info = fence["info"].split()[0].lower() if fence["info"] else ""
+        if info == "html":
+            bodies.append(fence_inner_html(text, fence))
+    return bodies
 
 
 def _has_heading_line(md_text: str, heading: str) -> bool:
@@ -374,11 +502,19 @@ def _md_section(md_text: str, heading: str) -> str | None:
 
 
 def iter_component_regions(md_text: str):
+    spans = unfenced_spans(md_text)
     for match in COMPONENT_HEADING.finditer(md_text):
+        if not _in_spans(match.start(), spans):
+            continue
         region_start = match.end()
-        nxt = re.search(r"(?m)^#{2,3} ", md_text[region_start:])
+        nxt = None
+        for nxt_match in re.finditer(r"(?m)^#{2,3} ", md_text[region_start:]):
+            abs_pos = region_start + nxt_match.start()
+            if _in_spans(abs_pos, spans):
+                nxt = nxt_match
+                break
         region_end = region_start + nxt.start() if nxt else len(md_text)
-        yield match.group(0).strip(), match.group(1), match.group(2), md_text[region_start:region_end]
+        yield match.group(0).strip(), match.group(1), match.group(2), region_start, region_end
 
 
 class ThemeHtmlInspector(HTMLParser):
@@ -445,13 +581,17 @@ class ThemeHtmlInspector(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         ltag = tag.lower()
+        matched = False
         for i in range(len(self.stack) - 1, -1, -1):
             if self.stack[i][0] == ltag:
+                matched = True
                 for _, was_leaf in self.stack[i:]:
                     if was_leaf:
                         self.leaf_depth -= 1
                 del self.stack[i:]
                 break
+        if not matched and ltag in FORBIDDEN_THEME_TAGS:
+            self._add("ERROR", f"{self.label}: {FORBIDDEN_THEME_TAGS[ltag]}")
 
     def handle_data(self, data: str) -> None:
         if any(t in SKIP_TAGS for t, _ in self.stack):
@@ -471,6 +611,8 @@ THEME_RAW_UNSAFE = [
     (re.compile(r"<script\b", re.I), "出现 <script>"),
     (re.compile(r"<object\b", re.I), "出现禁止标签"),
     (re.compile(r"<embed\b", re.I), "出现禁止标签"),
+    (re.compile(r"<meta\b", re.I), "出现禁止标签"),
+    (re.compile(r"</div\b", re.I), "出现 <div>，请用 <section>"),
 ]
 
 
@@ -557,17 +699,18 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
         md_text = ""
     else:
         md_text = md_path.read_text(encoding="utf-8")
+        structure_md = unfenced_markdown(md_text)
         for heading in REQUIRED_MD_HEADINGS:
-            if not _has_heading_line(md_text, heading):
+            if not _has_heading_line(structure_md, heading):
                 errors.append(f"THEME.md 缺少章节 {heading}")
-        recipe = _md_section(md_text, "## 文章类型配方")
+        recipe = _md_section(structure_md, "## 文章类型配方")
         if recipe is not None:
             covered = recipe_entry_ids(recipe)
             for kind in ARTICLE_TYPES:
                 if kind not in covered:
                     errors.append(f"THEME.md 文章类型配方缺少 {kind}")
 
-        slot_ids = SLOT_HEADING.findall(md_text)
+        slot_ids = SLOT_HEADING.findall(structure_md)
         for required in REQUIRED_SLOTS:
             if required not in slot_ids:
                 errors.append(f"THEME.md 缺少 ### slot:{required}")
@@ -575,7 +718,7 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
         if dup:
             errors.append(f"THEME.md 重复槽: {', '.join(dup)}")
 
-        sig_ids = SIG_HEADING.findall(md_text)
+        sig_ids = SIG_HEADING.findall(structure_md)
         unique_sig_ids = list(dict.fromkeys(sig_ids))
         sig_dup = _duplicates(sig_ids)
         if sig_dup:
@@ -585,15 +728,15 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
         if sorted(unique_sigs) != sorted(unique_sig_ids):
             errors.append("theme.json signature_slots 与 THEME.md ### sig:* 不一致")
 
-        for label, _kind, _ident, region in iter_component_regions(md_text):
-            fences = list(HTML_FENCE.finditer(region))
+        for label, _kind, _ident, region_start, region_end in iter_component_regions(md_text):
+            fences = html_fence_bodies(md_text, region_start, region_end)
             if not fences:
                 errors.append(f"{label} 缺少 html 代码块")
                 continue
             if len(fences) > 1:
                 errors.append(f"{label} 应恰好一个 html 代码块，当前 {len(fences)}")
-            for fence in fences:
-                for level, msg in lint_html_block(fence.group(1), label):
+            for body in fences:
+                for level, msg in lint_html_block(body, label):
                     (errors if level == "ERROR" else warnings).append(msg)
 
     if not preview_path.is_file():
