@@ -1,0 +1,185 @@
+{
+  "$comment": "Produced WeChat typesetting theme package. Validated by scripts/lint_theme.py.",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "version",
+    "description",
+    "structure_model",
+    "tokens",
+    "underline_css",
+    "tags",
+    "slots",
+    "files"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,38}[a-z0-9]$",
+      "description": "Folder name under themes/. No theme- prefix."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 24,
+      "description": "Chinese display name."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 200
+    },
+    "structure_model": {
+      "type": "object",
+      "required": ["voice", "density", "heading", "surface", "rhythm"],
+      "additionalProperties": false,
+      "properties": {
+        "voice": {
+          "type": "string",
+          "enum": ["narrative", "explainer", "catalog", "journal", "brand"]
+        },
+        "density": {
+          "type": "string",
+          "enum": ["sparse", "balanced", "packed"]
+        },
+        "heading": {
+          "type": "string",
+          "enum": ["masthead", "numbered-chapter", "labeled-rail", "stamp"]
+        },
+        "surface": {
+          "type": "string",
+          "enum": ["paper", "ink", "soft-card", "hairline"]
+        },
+        "rhythm": {
+          "type": "string",
+          "enum": ["long-breath", "staccato", "documentary"]
+        }
+      }
+    },
+    "tokens": {
+      "type": "object",
+      "required": ["color", "type", "shape", "layout"],
+      "additionalProperties": false,
+      "properties": {
+        "color": {
+          "type": "object",
+          "required": [
+            "page",
+            "ink",
+            "ink_muted",
+            "brand",
+            "brand_soft",
+            "brand_ink",
+            "accent",
+            "rule",
+            "underline"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "page": { "$ref": "#/$defs/hex" },
+            "ink": { "$ref": "#/$defs/hex" },
+            "ink_muted": { "$ref": "#/$defs/hex" },
+            "brand": { "$ref": "#/$defs/hex" },
+            "brand_soft": { "$ref": "#/$defs/hex" },
+            "brand_ink": { "$ref": "#/$defs/hex" },
+            "accent": { "$ref": "#/$defs/hex" },
+            "rule": { "$ref": "#/$defs/hex" },
+            "underline": { "$ref": "#/$defs/hex" }
+          }
+        },
+        "type": {
+          "type": "object",
+          "required": ["stack", "body_size", "body_line_height", "max_title_size"],
+          "additionalProperties": false,
+          "properties": {
+            "stack": {
+              "type": "string",
+              "enum": ["sans", "serif", "kai", "fangsong", "mono"]
+            },
+            "body_size": { "type": "string", "pattern": "^(14|15|16)px$" },
+            "body_line_height": { "type": "string", "pattern": "^1\\.[5-9][0-9]?$" },
+            "max_title_size": { "type": "string", "pattern": "^(18|19|20|21|22|23|24)px$" }
+          }
+        },
+        "shape": {
+          "type": "object",
+          "required": ["radius", "shadow"],
+          "additionalProperties": false,
+          "properties": {
+            "radius": { "type": "string" },
+            "shadow": { "type": "string" }
+          }
+        },
+        "layout": {
+          "type": "object",
+          "required": ["max_width", "gutter"],
+          "additionalProperties": false,
+          "properties": {
+            "max_width": { "type": "string", "const": "677px" },
+            "gutter": { "type": "string", "pattern": "^\\d+px$" }
+          }
+        }
+      }
+    },
+    "underline_css": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Inline CSS for keyword underlines in body copy."
+    },
+    "tags": {
+      "type": "object",
+      "required": ["craft", "mood", "scenes"],
+      "additionalProperties": false,
+      "properties": {
+        "craft": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4,
+          "items": { "type": "string" }
+        },
+        "mood": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4,
+          "items": { "type": "string" }
+        },
+        "scenes": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 4,
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "slots": {
+      "type": "array",
+      "minItems": 26,
+      "items": { "type": "string" }
+    },
+    "signature_slots": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "files": {
+      "type": "object",
+      "required": ["library", "preview"],
+      "additionalProperties": false,
+      "properties": {
+        "library": { "type": "string", "const": "THEME.md" },
+        "preview": { "type": "string", "const": "preview.html" }
+      }
+    }
+  },
+  "$defs": {
+    "hex": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}$"
+    }
+  }
+}
