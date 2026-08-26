@@ -333,6 +333,16 @@ def main() -> int:
     pr_err, _, _ = validate_article.validate(p_root)
     assert_true(any("section" in e for e in pr_err), f"非 section 根节点应失败: {pr_err}")
 
+    selfclose_leaf = styled_root(
+        '<span leaf=""/ ></span>'
+        '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">中文。</p>'
+    )
+    sc_err, _, _ = validate_article.validate(selfclose_leaf)
+    assert_true(
+        any("包裹" in e or "leaf" in e.lower() for e in sc_err),
+        f"非 void 自闭合 span[leaf] 不应把后续中文算作已包裹: {sc_err}",
+    )
+
     with tempfile.TemporaryDirectory() as tmp:
         preview_out = Path(tmp) / "out.html"
         wrap_preview.wrap(SCRIPTS / "testdata" / "valid_article.html", preview_out)
@@ -499,6 +509,29 @@ def main() -> int:
         hp_err, _ = lint_theme.lint_theme(hidden_preview, schema)
         assert_has(hp_err, "slot:footer", "hidden 子树里的预览标记不算覆盖")
 
+        css_hidden_preview = Path(tmp) / "css-hidden-preview-pack"
+        write_mini_theme(css_hidden_preview)
+        chp = (css_hidden_preview / "preview.html").read_text(encoding="utf-8")
+        (css_hidden_preview / "preview.html").write_text(
+            chp.replace("<p>slot:footer</p>", '<p style="display:none">slot:footer</p>'),
+            encoding="utf-8",
+        )
+        chp_err, _ = lint_theme.lint_theme(css_hidden_preview, schema)
+        assert_has(chp_err, "slot:footer", "display:none 的预览标记不算覆盖")
+
+        vis_hidden_preview = Path(tmp) / "vis-hidden-preview-pack"
+        write_mini_theme(vis_hidden_preview)
+        vhp = (vis_hidden_preview / "preview.html").read_text(encoding="utf-8")
+        (vis_hidden_preview / "preview.html").write_text(
+            vhp.replace(
+                "<p>slot:footer</p>",
+                '<p style="visibility:/* x */hidden">slot:footer</p>',
+            ),
+            encoding="utf-8",
+        )
+        vhp_err, _ = lint_theme.lint_theme(vis_hidden_preview, schema)
+        assert_has(vhp_err, "slot:footer", "visibility:hidden 的预览标记不算覆盖")
+
         split_preview = Path(tmp) / "split-preview-pack"
         write_mini_theme(split_preview)
         slp = (split_preview / "preview.html").read_text(encoding="utf-8")
@@ -517,6 +550,60 @@ def main() -> int:
         assert_true(
             any("缺少章节" in e or "缺少 ### slot:" in e for e in fenced_err),
             f"围栏内的 THEME.md 结构不应算数: {fenced_err}",
+        )
+
+        empty_fence = Path(tmp) / "empty-html-fence-pack"
+        write_mini_theme(empty_fence)
+        ef = (empty_fence / "THEME.md").read_text(encoding="utf-8")
+        ef = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n```html\n```\n",
+            ef,
+            count=1,
+            flags=re.S,
+        )
+        (empty_fence / "THEME.md").write_text(ef, encoding="utf-8")
+        ef_err, _ = lint_theme.lint_theme(empty_fence, schema)
+        assert_true(
+            any("slot:footer" in e and "html" in e for e in ef_err),
+            f"空 html 围栏不应算作实现: {ef_err}",
+        )
+
+        comment_only_fence = Path(tmp) / "comment-html-fence-pack"
+        write_mini_theme(comment_only_fence)
+        cof = (comment_only_fence / "THEME.md").read_text(encoding="utf-8")
+        cof = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n```html\n<!-- <p><span leaf=\"\">x</span></p> -->\n```\n",
+            cof,
+            count=1,
+            flags=re.S,
+        )
+        (comment_only_fence / "THEME.md").write_text(cof, encoding="utf-8")
+        cof_err, _ = lint_theme.lint_theme(comment_only_fence, schema)
+        assert_true(
+            any("slot:footer" in e and "html" in e for e in cof_err),
+            f"仅含 HTML 注释的围栏不应算作实现: {cof_err}",
+        )
+
+        commented_md = Path(tmp) / "commented-md-pack"
+        write_mini_theme(commented_md)
+        raw_commented = (commented_md / "THEME.md").read_text(encoding="utf-8")
+        (commented_md / "THEME.md").write_text(f"<!--\n{raw_commented}\n-->\n", encoding="utf-8")
+        commented_err, _ = lint_theme.lint_theme(commented_md, schema)
+        assert_true(
+            any("缺少章节" in e or "缺少 ### slot:" in e for e in commented_err),
+            f"HTML 注释里的 THEME.md 结构不应算数: {commented_err}",
+        )
+
+        html_wrapped_md = Path(tmp) / "html-wrapped-md-pack"
+        write_mini_theme(html_wrapped_md)
+        raw_wrapped = (html_wrapped_md / "THEME.md").read_text(encoding="utf-8")
+        (html_wrapped_md / "THEME.md").write_text(f"<div>\n{raw_wrapped}\n</div>\n", encoding="utf-8")
+        wrapped_err, _ = lint_theme.lint_theme(html_wrapped_md, schema)
+        assert_true(
+            any("缺少章节" in e or "缺少 ### slot:" in e for e in wrapped_err),
+            f"HTML 块里的 THEME.md 结构不应算数: {wrapped_err}",
         )
 
         dup_sig = Path(tmp) / "dup-sig-pack"

@@ -175,10 +175,10 @@ class ArticleChecker(HTMLParser):
         self.dup_style_count = 0
 
     def handle_startendtag(self, tag: str, attrs) -> None:
-        self._open(tag, attrs, void=True)
+        self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        self._open(tag, attrs, void=tag in VOID_TAGS)
+        self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
 
     def _open(self, tag: str, attrs, *, void: bool) -> None:
         ltag = tag.lower()

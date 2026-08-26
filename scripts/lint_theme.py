@@ -81,6 +81,12 @@ EXEC_IN_STYLE = re.compile(r"javascript\s*:|expression\s*\(|-moz-binding", re.I)
 
 SKIP_TAGS = {"head", "title", "style", "script"}
 VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
+CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+DISPLAY_NONE = re.compile(r"display\s*:\s*none\b", re.I)
+VISIBILITY_HIDDEN = re.compile(r"visibility\s*:\s*hidden\b", re.I)
+HTML_ELEMENT = re.compile(r"<[A-Za-z]")
+HTML_COMMENT_OPEN = "<!--"
+HTML_COMMENT_CLOSE = "-->"
 URL_ATTRS = {
     "href",
     "src",
@@ -322,6 +328,74 @@ def recipe_entry_ids(section: str) -> set[str]:
     return found
 
 
+def strip_html_comments(text: str) -> str:
+    """Remove HTML comments. An unclosed comment hides through end of text."""
+    pieces: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        start = text.find(HTML_COMMENT_OPEN, i)
+        if start == -1:
+            pieces.append(text[i:])
+            break
+        pieces.append(text[i:start])
+        end = text.find(HTML_COMMENT_CLOSE, start + len(HTML_COMMENT_OPEN))
+        if end == -1:
+            break
+        i = end + len(HTML_COMMENT_CLOSE)
+    return "".join(pieces)
+
+
+def html_body_has_element(body: str) -> bool:
+    """True when a fence contains at least one real HTML tag, not just comments/whitespace."""
+    return bool(HTML_ELEMENT.search(strip_html_comments(body)))
+
+
+def inline_style_hides(style: str) -> bool:
+    stripped = CSS_COMMENT.sub("", style or "")
+    return bool(DISPLAY_NONE.search(stripped) or VISIBILITY_HIDDEN.search(stripped))
+
+
+class VisibleMarkdownCollector(HTMLParser):
+    """Keep markdown that HTML actually renders; drop comments and tagged subtrees."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.depth = 0
+        self.parts: list[str] = []
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        if tag.lower() not in VOID_TAGS:
+            self.depth += 1
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag.lower() not in VOID_TAGS:
+            self.depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.depth:
+            self.depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self.depth == 0:
+            self.parts.append(data)
+
+    def handle_comment(self, _data: str) -> None:
+        return
+
+
+def visible_structure_markdown(text: str) -> str:
+    """Markdown that survives fences, HTML comments, and raw HTML blocks."""
+    unfenced = unfenced_markdown(text)
+    collector = VisibleMarkdownCollector()
+    try:
+        collector.feed(unfenced)
+        collector.close()
+    except Exception:  # noqa: BLE001
+        return strip_html_comments(unfenced)
+    return "".join(collector.parts)
+
+
 def has_preview_marker(haystack: str, ident: str, *prefixes: str) -> bool:
     for prefix in prefixes:
         needle = f"{prefix}{ident}"
@@ -354,7 +428,8 @@ class PreviewMarkerCollector(HTMLParser):
 
     def handle_startendtag(self, tag: str, attrs) -> None:
         self._open(tag, attrs)
-        self.handle_endtag(tag)
+        if tag.lower() in VOID_TAGS:
+            self.handle_endtag(tag)
 
     def handle_starttag(self, tag: str, attrs) -> None:
         self._open(tag, attrs)
@@ -362,6 +437,7 @@ class PreviewMarkerCollector(HTMLParser):
     def _open(self, tag: str, attrs) -> None:
         ltag = tag.lower()
         hidden = any(name.lower() == "hidden" for name, _ in attrs)
+        hidden = hidden or any(inline_style_hides(value or "") for name, value in attrs if name.lower() == "style")
         skip = self.skip_depth > 0 or ltag in PREVIEW_SKIP_TAGS or hidden
         if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
             self._flush_text()
@@ -536,10 +612,10 @@ class ThemeHtmlInspector(HTMLParser):
         self.findings.append(item)
 
     def handle_startendtag(self, tag: str, attrs) -> None:
-        self._open(tag, attrs, void=True)
+        self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        self._open(tag, attrs, void=tag in VOID_TAGS)
+        self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
 
     def _open(self, tag: str, attrs, *, void: bool) -> None:
         ltag = tag.lower()
@@ -699,7 +775,8 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
         md_text = ""
     else:
         md_text = md_path.read_text(encoding="utf-8")
-        structure_md = unfenced_markdown(md_text)
+        md_source = strip_html_comments(md_text)
+        structure_md = visible_structure_markdown(md_text)
         for heading in REQUIRED_MD_HEADINGS:
             if not _has_heading_line(structure_md, heading):
                 errors.append(f"THEME.md 缺少章节 {heading}")
@@ -728,8 +805,12 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
         if sorted(unique_sigs) != sorted(unique_sig_ids):
             errors.append("theme.json signature_slots 与 THEME.md ### sig:* 不一致")
 
-        for label, _kind, _ident, region_start, region_end in iter_component_regions(md_text):
-            fences = html_fence_bodies(md_text, region_start, region_end)
+        for label, _kind, _ident, region_start, region_end in iter_component_regions(md_source):
+            fences = [
+                body
+                for body in html_fence_bodies(md_source, region_start, region_end)
+                if html_body_has_element(body)
+            ]
             if not fences:
                 errors.append(f"{label} 缺少 html 代码块")
                 continue
