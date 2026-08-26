@@ -71,7 +71,7 @@ CJK = re.compile(r"[一-鿿㐀-䶿]")
 PLACEHOLDER = re.compile(r"\{\{[a-z0-9_-]+\}\}", re.I)
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
 PREVIEW_ID_TAIL = re.compile(r"[a-z0-9_-]")
-RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+\.)\s+`?([a-z][a-z0-9_-]*)`?", re.I)
+RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+[.)])\s+`?([a-z][a-z0-9_-]*)`?", re.I)
 RECIPE_PLAIN = re.compile(r"^`?([a-z][a-z0-9_-]*)`?\s*[:：]", re.I)
 EXEC_SCHEME = re.compile(
     r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:|"
@@ -83,9 +83,17 @@ EXEC_IN_STYLE = re.compile(r"javascript\s*:|expression\s*\(|-moz-binding", re.I)
 SKIP_TAGS = {"head", "title", "style", "script"}
 VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
 CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+CSS_IMPORTANT = re.compile(r"!\s*important\s*$", re.I)
 _CSS_HEX = frozenset("0123456789abcdefABCDEF")
 _CSS_ESCAPE_WS = frozenset(" \t\n\r\f")
 HTML_TAG_NAME = re.compile(r"^[a-z][a-z0-9-]*$", re.I)
+
+
+def html_tag_name(tag: str) -> str:
+    ltag = (tag or "").lower()
+    return "img" if ltag == "image" else ltag
+
+
 HTML_COMMENT_OPEN = "<!--"
 HTML_COMMENT_CLOSE = "-->"
 HTML_BLOCK_OPEN = re.compile(
@@ -160,7 +168,50 @@ THEME_NEED_STYLE = {
     "blockquote",
     "hr",
 }
-LEAF_BLOCK_TAGS = frozenset({"section", "div", "p", "h1", "h2", "h3", "table", "ul", "ol"})
+LEAF_BLOCK_TAGS = frozenset({
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "caption",
+    "details",
+    "dialog",
+    "div",
+    "dl",
+    "dt",
+    "dd",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "li",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "search",
+    "section",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+})
 IMPLIED_END_ON_START = {
     "li": frozenset({"li"}),
     "dt": frozenset({"dt", "dd"}),
@@ -589,6 +640,8 @@ def is_html_type7_line(raw: str) -> bool:
         return False
     i = match.end()
     n = len(raw)
+    if i < n and raw[i] not in " \t/>":
+        return False
     quote = None
     while i < n:
         ch = raw[i]
@@ -628,23 +681,29 @@ def has_css_declaration(style: str) -> bool:
 
 
 def inline_style_hides(style: str) -> bool:
+    winning: dict[str, tuple[str, bool]] = {}
     for prop, value in iter_css_declarations(style):
-        raw = value.split("!", 1)[0].strip()
+        important = bool(CSS_IMPORTANT.search(value))
+        raw = CSS_IMPORTANT.sub("", value).strip()
         token = raw.split()[0].lower() if raw else ""
-        if prop == "display" and token == "none":
-            return True
-        if prop == "visibility" and token == "hidden":
-            return True
-        if prop == "opacity":
-            raw_token = token
-            if raw_token.endswith("%"):
-                raw_token = raw_token[:-1]
-            try:
-                if float(raw_token) == 0:
-                    return True
-            except ValueError:
-                pass
-    return False
+        prev = winning.get(prop)
+        if prev is not None and prev[1] and not important:
+            continue
+        winning[prop] = (token, important)
+    display = winning.get("display", ("", False))[0]
+    if display == "none":
+        return True
+    visibility = winning.get("visibility", ("", False))[0]
+    if visibility == "hidden":
+        return True
+    opacity = winning.get("opacity", ("", False))[0]
+    if not opacity:
+        return False
+    raw_token = opacity[:-1] if opacity.endswith("%") else opacity
+    try:
+        return float(raw_token) == 0
+    except ValueError:
+        return False
 
 
 def is_real_html_tag(tag: str) -> bool:
@@ -786,9 +845,10 @@ class PreviewMarkerCollector(HTMLParser):
         self.handle_starttag(tag, attrs)
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        self._open(tag, attrs)
-        if tag.lower() in VOID_TAGS:
-            self.handle_endtag(tag)
+        ltag = html_tag_name(tag)
+        self._open(ltag, attrs)
+        if ltag in VOID_TAGS:
+            self.handle_endtag(ltag)
 
     def _pop_implied(self, targets: set[str], stop: frozenset[str]) -> None:
         if not targets:
@@ -1127,7 +1187,8 @@ class ThemeHtmlInspector(HTMLParser):
             self.handle_endtag(top)
 
     def _open(self, tag: str, attrs, *, void: bool) -> None:
-        ltag = tag.lower()
+        ltag = html_tag_name(tag)
+        void = ltag in VOID_TAGS
         self._implied_close(ltag)
         self._close_nested_anchor(ltag)
         self._clear_table_stack(ltag)

@@ -30,6 +30,11 @@ EXEC_IN_STYLE = re.compile(r"javascript\s*:|expression\s*\(|-moz-binding", re.I)
 
 SKIP_TAGS = {"head", "title", "style", "script"}
 VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
+
+
+def html_tag_name(tag: str) -> str:
+    ltag = (tag or "").lower()
+    return "img" if ltag == "image" else ltag
 DOCUMENT_TAGS = {"html", "head", "body"}
 FORBIDDEN_TAGS = {
     "style": "<style> 会被过滤，样式必须内联",
@@ -187,7 +192,50 @@ BLOCK_NEED_STYLE = {
     "blockquote",
     "hr",
 }
-LEAF_BLOCK_TAGS = frozenset({"section", "div", "p", "h1", "h2", "h3", "table", "ul", "ol"})
+LEAF_BLOCK_TAGS = frozenset({
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "caption",
+    "details",
+    "dialog",
+    "div",
+    "dl",
+    "dt",
+    "dd",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "li",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "search",
+    "section",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+})
 URL_ATTRS = {
     "href",
     "src",
@@ -430,7 +478,8 @@ class ArticleChecker(HTMLParser):
             self.handle_endtag(top)
 
     def _open(self, tag: str, attrs, *, void: bool) -> None:
-        ltag = tag.lower()
+        ltag = html_tag_name(tag)
+        void = ltag in VOID_TAGS
         self._implied_close(ltag)
         self._close_nested_anchor(ltag)
         self._clear_table_stack(ltag)
@@ -509,6 +558,10 @@ class ArticleChecker(HTMLParser):
             # HTML tree builder inserts an empty <p> for a stray </p>, then closes it.
             self._open("p", [], void=False)
             self.handle_endtag("p")
+            return
+        if ltag == "br":
+            # HTML tree builder reprocesses stray </br> as a <br> start tag.
+            self._open("br", [], void=True)
             return
         if ltag in FORBIDDEN_TAGS:
             self.tag_hits[ltag] += 1

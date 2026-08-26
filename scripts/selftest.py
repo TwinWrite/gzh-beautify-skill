@@ -354,6 +354,33 @@ def main() -> int:
         f"根 section 后的游离 </p> 应失败: {stray_p_err}",
     )
 
+    stray_br = styled_root(body_p("正文。")) + "</br>"
+    stray_br_err, _, _ = validate_article.validate(stray_br)
+    assert_true(
+        any("顶层" in e or "section" in e for e in stray_br_err),
+        f"根 section 后的游离 </br> 应失败: {stray_br_err}",
+    )
+
+    leaf_quote = styled_root(
+        '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
+        '<span leaf=""><blockquote style="margin:0;font-size:16px;">中文。</blockquote></span></p>'
+    )
+    lq_err, _, _ = validate_article.validate(leaf_quote)
+    assert_true(
+        any("块级" in e or "leaf" in e.lower() for e in lq_err),
+        f"leaf 内 blockquote 应失败: {lq_err}",
+    )
+
+    legacy_image = styled_root(
+        '<image style="font-family:monospace;max-width:100%;height:auto;display:block;">'
+        + body_p('他说"你好"。')
+    )
+    _, lim_warn, _ = validate_article.validate(legacy_image)
+    assert_true(
+        any("半角" in w for w in lim_warn),
+        f"<image> 等宽不应把后续正文当代码: {lim_warn}",
+    )
+
     selfclose_leaf = styled_root(
         '<span leaf=""/ ></span>'
         '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">中文。</p>'
@@ -660,6 +687,15 @@ def main() -> int:
         plain_err, _ = lint_theme.lint_theme(plain_recipe, schema)
         assert_true(not plain_err, f"普通配方行应通过: {plain_err}")
 
+        paren_recipe = Path(tmp) / "paren-recipe-pack"
+        write_mini_theme(paren_recipe)
+        pnd = (paren_recipe / "THEME.md").read_text(encoding="utf-8")
+        for i, kind in enumerate(lint_theme.ARTICLE_TYPES, 1):
+            pnd = pnd.replace(f"- `{kind}`: hero + h2 + paragraph\n", f"{i}) {kind}: hero + h2 + paragraph\n")
+        (paren_recipe / "THEME.md").write_text(pnd, encoding="utf-8")
+        paren_err, _ = lint_theme.lint_theme(paren_recipe, schema)
+        assert_true(not paren_err, f"括号有序列表配方应通过: {paren_err}")
+
         mention_heading = Path(tmp) / "mention-heading-pack"
         write_mini_theme(mention_heading)
         mh = (mention_heading / "THEME.md").read_text(encoding="utf-8")
@@ -881,6 +917,32 @@ def main() -> int:
         oppp_err, _ = lint_theme.lint_theme(opacity_pct_preview, schema)
         assert_has(oppp_err, "slot:footer", "opacity:0% 的预览标记不算覆盖")
 
+        opacity_override_preview = Path(tmp) / "opacity-override-preview-pack"
+        write_mini_theme(opacity_override_preview)
+        opo = (opacity_override_preview / "preview.html").read_text(encoding="utf-8")
+        (opacity_override_preview / "preview.html").write_text(
+            opo.replace("<p>slot:footer</p>", '<p style="opacity:0;opacity:1">slot:footer</p>'),
+            encoding="utf-8",
+        )
+        opo_err, _ = lint_theme.lint_theme(opacity_override_preview, schema)
+        assert_true(
+            not any("slot:footer" in e for e in opo_err),
+            f"后声明 opacity:1 的标记应算覆盖: {opo_err}",
+        )
+
+        display_override_preview = Path(tmp) / "display-override-preview-pack"
+        write_mini_theme(display_override_preview)
+        dvo = (display_override_preview / "preview.html").read_text(encoding="utf-8")
+        (display_override_preview / "preview.html").write_text(
+            dvo.replace("<p>slot:footer</p>", '<p style="display:none;display:block">slot:footer</p>'),
+            encoding="utf-8",
+        )
+        dvo_err, _ = lint_theme.lint_theme(display_override_preview, schema)
+        assert_true(
+            not any("slot:footer" in e for e in dvo_err),
+            f"后声明 display:block 的标记应算覆盖: {dvo_err}",
+        )
+
         tbody_preview = Path(tmp) / "tbody-preview-pack"
         write_mini_theme(tbody_preview)
         tbp = (tbody_preview / "preview.html").read_text(encoding="utf-8")
@@ -1048,6 +1110,14 @@ def main() -> int:
         auto_err, _ = lint_theme.lint_theme(autolink_md, schema)
         assert_true(not auto_err, f"Markdown 自动链接不应吞掉后续结构: {auto_err}")
 
+        autolink_tight = Path(tmp) / "autolink-tight-pack"
+        write_mini_theme(autolink_tight)
+        raw_tight = (autolink_tight / "THEME.md").read_text(encoding="utf-8")
+        raw_tight = raw_tight.replace("## 结构模型\n", "<https://example.com>\n## 结构模型\n")
+        (autolink_tight / "THEME.md").write_text(raw_tight, encoding="utf-8")
+        tight_err, _ = lint_theme.lint_theme(autolink_tight, schema)
+        assert_true(not tight_err, f"自动链接后无空行不应吞掉标题: {tight_err}")
+
         selfclose_md = Path(tmp) / "selfclose-md-pack"
         write_mini_theme(selfclose_md)
         raw_sc = (selfclose_md / "THEME.md").read_text(encoding="utf-8")
@@ -1166,6 +1236,15 @@ def main() -> int:
         assert_true(
             any("leaf" in msg and "块" in msg for _, msg in leaf_block_comp),
             f"组件 leaf 内块级标签应失败: {leaf_block_comp}",
+        )
+
+        leaf_quote_comp = lint_theme.lint_html_block(
+            '<span leaf=""><blockquote style="margin:0">中文。</blockquote></span>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("leaf" in msg and "块" in msg for _, msg in leaf_quote_comp),
+            f"组件 leaf 内 blockquote 应失败: {leaf_quote_comp}",
         )
 
         select_comp = lint_theme.lint_html_block(
