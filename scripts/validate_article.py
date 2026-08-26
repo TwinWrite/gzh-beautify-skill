@@ -11,6 +11,7 @@ from html.parser import HTMLParser
 
 CJK = re.compile(r"[一-鿿㐀-䶿]")
 HALF_PUNCT = re.compile(r"[,;!?:]|[\"']")
+NUMERIC_SEP = re.compile(r"(?<=\d)[,:](?=\d)")
 URL_OR_EMAIL = re.compile(
     r"(?i)(?:https?://|ftp://|mailto:)[^\s<>\"']+|"
     r"www\.[^\s<>\"']+|"
@@ -196,6 +197,11 @@ def prose_without_urls(text: str) -> str:
     return URL_OR_EMAIL.sub(repl, text)
 
 
+def prose_for_punct(text: str) -> str:
+    """Drop URLs and digit-flanked numeric separators before half-width checks."""
+    return NUMERIC_SEP.sub(" ", prose_without_urls(text))
+
+
 class ArticleChecker(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -230,6 +236,15 @@ class ArticleChecker(HTMLParser):
     def _implied_close(self, incoming: str) -> None:
         targets = IMPLIED_END_ON_START.get(incoming)
         if not targets:
+            return
+        has_target = False
+        for tag, *_rest in reversed(self.stack):
+            if tag in IMPLIED_END_STOP:
+                break
+            if tag in targets:
+                has_target = True
+                break
+        if not has_target:
             return
         while self.stack:
             top = self.stack[-1][0]
@@ -328,7 +343,7 @@ class ArticleChecker(HTMLParser):
             parent = self.stack[-1][0] if self.stack else "(root)"
             snippet = text[:24] + ("…" if len(text) > 24 else "")
             self.unwrapped.append((snippet, parent))
-        if self.code_depth == 0 and HALF_PUNCT.search(prose_without_urls(text)):
+        if self.code_depth == 0 and HALF_PUNCT.search(prose_for_punct(text)):
             snippet = text[:24] + ("…" if len(text) > 24 else "")
             self.half_punct.append(snippet)
 

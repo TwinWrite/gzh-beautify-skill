@@ -615,7 +615,11 @@ def iter_top_level_fences(text: str):
             continue
         open_m = FENCE_OPEN.match(raw)
         if open_m:
-            opener = (pos, open_m.group(1), open_m.group(2).strip())
+            marker, info = open_m.group(1), open_m.group(2)
+            if marker.startswith("`") and "`" in info:
+                pos += len(line)
+                continue
+            opener = (pos, marker, info.strip())
         pos += len(line)
     if opener is not None:
         start, marker, info = opener
@@ -728,6 +732,15 @@ class ThemeHtmlInspector(HTMLParser):
     def _implied_close(self, incoming: str) -> None:
         targets = IMPLIED_END_ON_START.get(incoming)
         if not targets:
+            return
+        has_target = False
+        for tag, *_rest in reversed(self.stack):
+            if tag in IMPLIED_END_STOP:
+                break
+            if tag in targets:
+                has_target = True
+                break
+        if not has_target:
             return
         while self.stack:
             top = self.stack[-1][0]

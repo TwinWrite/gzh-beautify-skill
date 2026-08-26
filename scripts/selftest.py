@@ -229,6 +229,10 @@ def main() -> int:
     _, url_warn, _ = validate_article.validate(url_prose)
     assert_true(not any("半角" in w for w in url_warn), f"正文 URL 不应报半角标点: {url_warn}")
 
+    numeric_prose = styled_root(body_p("会议 12:30 开始，约 1,234 人，比例 16:9。"))
+    _, num_warn, _ = validate_article.validate(numeric_prose)
+    assert_true(not any("半角" in w for w in num_warn), f"数字字面量中的 ,/: 不应报半角标点: {num_warn}")
+
     empty_first_style = (
         '<section style="" style="max-width:677px;margin:0 auto">'
         f"{body_p('正文。')}</section>"
@@ -381,6 +385,18 @@ def main() -> int:
     assert_true(
         any("包裹" in e or "leaf" in e.lower() for e in ili_err),
         f"省略 </li> 时后一项中文不应算已包裹: {ili_err}",
+    )
+
+    code_li_p = styled_root(
+        '<ul style="margin:0 0 16px;padding-left:1.4em;">'
+        '<li style="margin:0;font-family:Consolas,Monaco,monospace;font-size:13px;">'
+        '<p style="margin:0;font-size:13px;"><span leaf="">调用 print("x")。</span></p>'
+        "</li></ul>"
+    )
+    _, clp_warn, _ = validate_article.validate(code_li_p)
+    assert_true(
+        not any("半角" in w for w in clp_warn),
+        f"li 内第一段 p 不应丢掉代码样式: {clp_warn}",
     )
 
     base_tag = styled_root(f'{body_p("正文。")}<base href="https://attacker.example/">')
@@ -736,6 +752,23 @@ def main() -> int:
         assert_true(
             any("slot:footer" in e and "html" in e for e in mf_err),
             f"混合字符围栏不应算作 html 实现: {mf_err}",
+        )
+
+        tick_info_fence = Path(tmp) / "tick-info-fence-pack"
+        write_mini_theme(tick_info_fence)
+        tif = (tick_info_fence / "THEME.md").read_text(encoding="utf-8")
+        tif = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n```html `example`\n<p style=\"font-size:16px;\"><span leaf=\"\">页脚</span></p>\n```\n",
+            tif,
+            count=1,
+            flags=re.S,
+        )
+        (tick_info_fence / "THEME.md").write_text(tif, encoding="utf-8")
+        tif_err, _ = lint_theme.lint_theme(tick_info_fence, schema)
+        assert_true(
+            any("slot:footer" in e and "html" in e for e in tif_err),
+            f"反引号围栏 info 含反引号不应算实现: {tif_err}",
         )
 
         type1_fence = Path(tmp) / "type1-fence-pack"
