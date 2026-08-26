@@ -43,6 +43,8 @@ FORBIDDEN_TAGS = {
     "form": "出现禁止标签",
     "button": "出现禁止标签",
     "input": "出现禁止标签",
+    "object": "出现禁止标签",
+    "embed": "出现禁止标签",
     "pre": "禁止 <pre>/<code>，代码块须逐行 <p>",
     "code": "禁止 <pre>/<code>，代码块须逐行 <p>",
 }
@@ -73,6 +75,16 @@ URL_ATTRS = {
 }
 
 
+ACTIVE_DATA_TOKEN = re.compile(r"(?:html|svg|xml|javascript|ecmascript)", re.I)
+RAW_UNSAFE = [
+    (re.compile(r"<!\[", re.I), "禁止 CDATA / 不完整声明"),
+    (re.compile(r"<script\b", re.I), "<script> 会被过滤"),
+    (re.compile(r"<object\b", re.I), "出现禁止标签"),
+    (re.compile(r"<embed\b", re.I), "出现禁止标签"),
+    (re.compile(r"<iframe\b", re.I), "出现禁止标签"),
+]
+
+
 def normalize_scheme_text(value: str) -> str:
     """Strip ASCII controls/spaces that URL processors ignore in schemes."""
     return SCHEME_IGNORED.sub("", value or "")
@@ -81,7 +93,14 @@ def normalize_scheme_text(value: str) -> str:
 def is_executable_url(value: str) -> bool:
     if not value:
         return False
-    return bool(EXEC_SCHEME.search(normalize_scheme_text(value)))
+    text = normalize_scheme_text(value)
+    if EXEC_SCHEME.search(text):
+        return True
+    lower = text.lower()
+    if lower.startswith("data:"):
+        header = lower.split(",", 1)[0]
+        return bool(ACTIVE_DATA_TOKEN.search(header))
+    return False
 
 
 def attr_values(attrs, name: str) -> list[str]:
@@ -121,6 +140,7 @@ class ArticleChecker(HTMLParser):
         self.unstyled_blocks: Counter[str] = Counter()
         self.style_count = 0
         self.styled_root = False
+        self.dup_style_count = 0
 
     def handle_startendtag(self, tag: str, attrs) -> None:
         self._open(tag, attrs, void=True)
@@ -141,7 +161,10 @@ class ArticleChecker(HTMLParser):
         if ltag in FORBIDDEN_TAGS:
             self.tag_hits[ltag] += 1
 
-        if any(style.strip() for style in styles):
+        if len(styles) > 1:
+            self.dup_style_count += 1
+        effective_style = styles[0] if styles else ""
+        if effective_style.strip():
             self.style_count += 1
             if at_root and ltag == "section":
                 self.styled_root = True
@@ -171,7 +194,7 @@ class ArticleChecker(HTMLParser):
                     self.font_size_hits.append(size)
 
         is_leaf = ltag == "span" and "leaf" in ad
-        is_code = any(CODE_STYLE.search(style) for style in styles)
+        is_code = bool(CODE_STYLE.search(effective_style))
         if is_leaf:
             self.span_leaf_count += 1
             self.leaf_depth += 1
@@ -196,8 +219,9 @@ class ArticleChecker(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         if not self.stack:
-            if data.strip():
-                self.root_text.append(data.strip()[:24])
+            text = data.lstrip("\ufeff").strip()
+            if text:
+                self.root_text.append(text[:24])
             return
         text = data.strip()
         if not text or not CJK.search(text):
@@ -217,13 +241,26 @@ def _count_msg(template: str, n: int) -> str:
     return f"{template}（命中 {n} 处）"
 
 
+def scan_raw_markup(html: str) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for rx, msg in RAW_UNSAFE:
+        if rx.search(html) and msg not in seen:
+            seen.add(msg)
+            found.append(msg)
+    return found
+
+
 def validate(html: str) -> tuple[list[str], list[str], int]:
+    html = html.lstrip("\ufeff")
     errors: list[str] = []
     warnings: list[str] = []
 
     leftover = PLACEHOLDER.findall(html)
     if leftover:
         warnings.append(f"仍有 {len(leftover)} 处 {{{{占位符}}}} 未替换，例 {leftover[0]}")
+
+    errors.extend(scan_raw_markup(html))
 
     checker = ArticleChecker()
     try:
@@ -249,6 +286,8 @@ def validate(html: str) -> tuple[list[str], list[str], int]:
     if checker.event_attrs:
         sample = "、".join(sorted(set(checker.event_attrs))[:6])
         errors.append(_count_msg(f"禁止事件属性（{sample}）", len(checker.event_attrs)))
+    if checker.dup_style_count:
+        errors.append(_count_msg("禁止重复 style 属性", checker.dup_style_count))
     if checker.exec_urls:
         errors.append(_count_msg("禁止 javascript:/vbscript:/data:html 等可执行 URL", len(checker.exec_urls)))
     for msg, n in Counter(checker.css_hits).items():
@@ -303,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         name = "<stdin>"
     else:
         path = args.file
-        with open(path, encoding="utf-8", errors="replace") as handle:
+        with open(path, encoding="utf-8-sig", errors="replace") as handle:
             html = handle.read()
         name = path
 

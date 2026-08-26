@@ -106,6 +106,8 @@ FORBIDDEN_THEME_TAGS = {
     "form": "出现禁止标签",
     "button": "出现禁止标签",
     "input": "出现禁止标签",
+    "object": "出现禁止标签",
+    "embed": "出现禁止标签",
     "pre": "禁止 <pre>/<code>，代码块请逐行 <p>",
     "code": "禁止 <pre>/<code>，代码块请逐行 <p>",
 }
@@ -227,7 +229,14 @@ def find_theme_dirs(target: Path) -> list[Path]:
 def is_executable_url(value: str) -> bool:
     if not value:
         return False
-    return bool(EXEC_SCHEME.search(SCHEME_IGNORED.sub("", value)))
+    text = SCHEME_IGNORED.sub("", value)
+    if EXEC_SCHEME.search(text):
+        return True
+    lower = text.lower()
+    if lower.startswith("data:"):
+        header = lower.split(",", 1)[0]
+        return bool(re.search(r"(?:html|svg|xml|javascript|ecmascript)", header, re.I))
+    return False
 
 
 def attr_values(attrs, name: str) -> list[str]:
@@ -269,25 +278,26 @@ def has_preview_marker(preview: str, ident: str, *prefixes: str) -> bool:
     return False
 
 
+def _has_heading_line(md_text: str, heading: str) -> bool:
+    return bool(re.search(rf"(?m)^{re.escape(heading)}\s*$", md_text))
+
+
 def _md_section(md_text: str, heading: str) -> str | None:
-    start = md_text.find(heading)
-    if start == -1:
+    match = re.search(rf"(?m)^{re.escape(heading)}\s*$", md_text)
+    if not match:
         return None
-    rest = md_text[start + len(heading) :]
-    nxt = re.search(r"\n## ", rest)
+    rest = md_text[match.end() :]
+    nxt = re.search(r"(?m)^## ", rest)
     if nxt:
-        return md_text[start : start + len(heading) + nxt.start()]
-    return md_text[start:]
+        return md_text[match.start() : match.end() + nxt.start()]
+    return md_text[match.start() :]
 
 
 def iter_component_regions(md_text: str):
-    headings = list(COMPONENT_HEADING.finditer(md_text))
-    for i, match in enumerate(headings):
+    for match in COMPONENT_HEADING.finditer(md_text):
         region_start = match.end()
-        region_end = headings[i + 1].start() if i + 1 < len(headings) else len(md_text)
-        h2 = re.search(r"\n## ", md_text[region_start:region_end])
-        if h2:
-            region_end = region_start + h2.start()
+        nxt = re.search(r"(?m)^#{2,3} ", md_text[region_start:])
+        region_end = region_start + nxt.start() if nxt else len(md_text)
         yield match.group(0).strip(), match.group(1), match.group(2), md_text[region_start:region_end]
 
 
@@ -324,6 +334,9 @@ class ThemeHtmlInspector(HTMLParser):
             self._add("ERROR", f"{self.label}: 出现 class（交付组件禁止）")
         if "id" in ad:
             self._add("ERROR", f"{self.label}: 出现 id（THEME.md 组件禁止，预览页可用）")
+        styles = attr_values(attrs, "style")
+        if len(styles) > 1:
+            self._add("ERROR", f"{self.label}: 禁止重复 style 属性")
         for name, value in attrs:
             lname = name.lower()
             if lname.startswith("on") and len(lname) > 2:
@@ -373,8 +386,19 @@ class ThemeHtmlInspector(HTMLParser):
             self._add("ERROR", f"{self.label}: 占位或中文未包在 span[leaf] 内（{snippet}）")
 
 
+THEME_RAW_UNSAFE = [
+    (re.compile(r"<!\[", re.I), "禁止 CDATA / 不完整声明"),
+    (re.compile(r"<script\b", re.I), "出现 <script>"),
+    (re.compile(r"<object\b", re.I), "出现禁止标签"),
+    (re.compile(r"<embed\b", re.I), "出现禁止标签"),
+]
+
+
 def lint_html_block(html: str, label: str) -> list[tuple[str, str]]:
     inspector = ThemeHtmlInspector(label)
+    for rx, msg in THEME_RAW_UNSAFE:
+        if rx.search(html):
+            inspector._add("ERROR", f"{label}: {msg}")
     try:
         inspector.feed(html)
         inspector.close()
@@ -454,7 +478,7 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
     else:
         md_text = md_path.read_text(encoding="utf-8")
         for heading in REQUIRED_MD_HEADINGS:
-            if heading not in md_text:
+            if not _has_heading_line(md_text, heading):
                 errors.append(f"THEME.md 缺少章节 {heading}")
         recipe = _md_section(md_text, "## 文章类型配方")
         if recipe is not None:

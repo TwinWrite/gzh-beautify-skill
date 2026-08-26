@@ -225,6 +225,39 @@ def main() -> int:
     _, url_warn, _ = validate_article.validate(url_prose)
     assert_true(not any("半角" in w for w in url_warn), f"正文 URL 不应报半角标点: {url_warn}")
 
+    empty_first_style = (
+        '<section style="" style="max-width:677px;margin:0 auto">'
+        f"{body_p('正文。')}</section>"
+    )
+    efs_err, _, _ = validate_article.validate(empty_first_style)
+    assert_true(
+        any("style" in e.lower() for e in efs_err),
+        f"首个空 style 应视为无样式: {efs_err}",
+    )
+
+    svg_object = styled_root(
+        f"{body_p('正文。')}<object data=\"data:image/svg+xml,<svg onload=alert(1)>\"></object>"
+    )
+    so_err, _, _ = validate_article.validate(svg_object)
+    assert_true(
+        any("object" in e.lower() or "禁止" in e or "可执行" in e for e in so_err),
+        f"svg data URI object 应失败: {so_err}",
+    )
+
+    cdata_script = (
+        '<section style="max-width:677px;margin:0 auto">'
+        f"{body_p('正文。')}<![CDATA[><script>alert(1)</script></section>"
+    )
+    cd_err, _, _ = validate_article.validate(cdata_script)
+    assert_true(
+        any("CDATA" in e or "script" in e.lower() or "声明" in e for e in cd_err),
+        f"残缺 CDATA+script 应失败: {cd_err}",
+    )
+
+    bom_html = "\ufeff" + (SCRIPTS / "testdata" / "valid_article.html").read_text(encoding="utf-8")
+    bom_err, bom_warn, _ = validate_article.validate(bom_html)
+    assert_true(not bom_err, f"UTF-8 BOM 不应导致合法正文失败: {bom_err}")
+
     wrapped_doc = (
         "<html><body>"
         + styled_root(body_p("正文。"))
@@ -333,6 +366,28 @@ def main() -> int:
         (named_recipe / "THEME.md").write_text(nrmd, encoding="utf-8")
         named_err, _ = lint_theme.lint_theme(named_recipe, schema)
         assert_has(named_err, "tutorial", "仅提及 tutorial 不算配方")
+
+        mention_heading = Path(tmp) / "mention-heading-pack"
+        write_mini_theme(mention_heading)
+        mh = (mention_heading / "THEME.md").read_text(encoding="utf-8")
+        mh = mh.replace("## 文章类型配方\n", "说明见 ## 文章类型配方 的写法。\n\n## 文章类型配方\n")
+        (mention_heading / "THEME.md").write_text(mh, encoding="utf-8")
+        mh_err, _ = lint_theme.lint_theme(mention_heading, schema)
+        assert_true(not mh_err, f"正文提到章节名不应误伤配方: {mh_err}")
+
+        notes_fence = Path(tmp) / "notes-fence-pack"
+        write_mini_theme(notes_fence)
+        nf = (notes_fence / "THEME.md").read_text(encoding="utf-8")
+        nf = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n### Notes\n\n```html\n<p style=\"font-size:16px;\"><span leaf=\"\">备注</span></p>\n```\n",
+            nf,
+            count=1,
+            flags=re.S,
+        )
+        (notes_fence / "THEME.md").write_text(nf, encoding="utf-8")
+        nf_err, _ = lint_theme.lint_theme(notes_fence, schema)
+        assert_true(any("slot:footer" in e and "html" in e for e in nf_err), f"### Notes 围栏不应算作槽位: {nf_err}")
 
         prefix_preview = Path(tmp) / "prefix-preview-pack"
         write_mini_theme(prefix_preview)
