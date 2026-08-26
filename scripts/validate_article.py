@@ -30,11 +30,20 @@ EXEC_IN_STYLE = re.compile(r"javascript\s*:|expression\s*\(|-moz-binding", re.I)
 
 SKIP_TAGS = {"head", "title", "style", "script"}
 VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr", "param"}
+HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 
 
 def html_tag_name(tag: str) -> str:
     ltag = (tag or "").lower()
     return "img" if ltag == "image" else ltag
+
+
+def end_tag_matches(open_tag: str, end_tag: str) -> bool:
+    if open_tag == end_tag:
+        return True
+    return open_tag in HEADING_TAGS and end_tag in HEADING_TAGS
+
+
 DOCUMENT_TAGS = {"html", "head", "body"}
 FORBIDDEN_TAGS = {
     "style": "<style> 会被过滤，样式必须内联",
@@ -559,7 +568,7 @@ class ArticleChecker(HTMLParser):
         ltag = tag.lower()
         matched = False
         for i in range(len(self.stack) - 1, -1, -1):
-            if self.stack[i][0] == ltag:
+            if end_tag_matches(self.stack[i][0], ltag):
                 matched = True
                 if ltag in LEAF_BLOCK_TAGS:
                     self._flush_prose()

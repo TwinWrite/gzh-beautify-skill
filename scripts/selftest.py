@@ -388,6 +388,15 @@ def main() -> int:
         f"无 style 的 h4 应失败: {uh4_err}",
     )
 
+    mismatch_heading = styled_root(
+        '<h1 style="font-size:22px;margin:0;"><span leaf="">一。</h2>二。</span></h1>'
+    )
+    mh_err, _, _ = validate_article.validate(mismatch_heading)
+    assert_true(
+        any("包裹" in e or "leaf" in e.lower() for e in mh_err),
+        f"</h2> 应闭合 h1，二。须未包裹: {mh_err}",
+    )
+
     legacy_image = styled_root(
         '<image style="font-family:monospace;max-width:100%;height:auto;display:block;">'
         + body_p('他说"你好"。')
@@ -1064,6 +1073,47 @@ def main() -> int:
         stdp_err, _ = lint_theme.lint_theme(stray_td_preview, schema)
         assert_has(stdp_err, "slot:footer", "hidden 祖先里的游离 td 不算覆盖")
 
+        datalist_preview = Path(tmp) / "datalist-preview-pack"
+        write_mini_theme(datalist_preview)
+        dlp = (datalist_preview / "preview.html").read_text(encoding="utf-8")
+        (datalist_preview / "preview.html").write_text(
+            dlp.replace(
+                "<p>slot:footer</p>",
+                '<datalist><option data-slot="slot:footer">Footer</option></datalist>',
+            ),
+            encoding="utf-8",
+        )
+        dlp_err, _ = lint_theme.lint_theme(datalist_preview, schema)
+        assert_has(dlp_err, "slot:footer", "datalist 子树里的预览标记不算覆盖")
+
+        quoted_attr_sheet = Path(tmp) / "quoted-attr-sheet-pack"
+        write_mini_theme(quoted_attr_sheet)
+        qas = (quoted_attr_sheet / "preview.html").read_text(encoding="utf-8")
+        qas = qas.replace(
+            "</head>",
+            '<style>[data-label="a b"]{display:none}</style></head>',
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p data-label="a b">slot:footer</p>',
+        )
+        (quoted_attr_sheet / "preview.html").write_text(qas, encoding="utf-8")
+        qas_err, _ = lint_theme.lint_theme(quoted_attr_sheet, schema)
+        assert_has(qas_err, "slot:footer", "带空格的属性选择器应能隐藏预览标记")
+
+        important_sheet = Path(tmp) / "important-sheet-pack"
+        write_mini_theme(important_sheet)
+        ims = (important_sheet / "preview.html").read_text(encoding="utf-8")
+        ims = ims.replace(
+            "</head>",
+            "<style>#footer{display:none!important}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer" style="display:block">slot:footer</p>',
+        )
+        (important_sheet / "preview.html").write_text(ims, encoding="utf-8")
+        ims_err, _ = lint_theme.lint_theme(important_sheet, schema)
+        assert_has(ims_err, "slot:footer", "样式表 !important 应压过 inline display:block")
+
         tbody_preview = Path(tmp) / "tbody-preview-pack"
         write_mini_theme(tbody_preview)
         tbp = (tbody_preview / "preview.html").read_text(encoding="utf-8")
@@ -1272,6 +1322,47 @@ def main() -> int:
         assert_true(
             any("结构模型" in e for e in t1s_err),
             f"</script > 不应结束 type-1 块: {t1s_err}",
+        )
+
+        type4_lower = Path(tmp) / "type4-lower-pack"
+        write_mini_theme(type4_lower)
+        t4l = (type4_lower / "THEME.md").read_text(encoding="utf-8")
+        t4l = t4l.replace("## 结构模型\n", "<!foo\n## 结构模型\n>\n")
+        (type4_lower / "THEME.md").write_text(t4l, encoding="utf-8")
+        t4l_err, _ = lint_theme.lint_theme(type4_lower, schema)
+        assert_true(not t4l_err, f"小写 <!foo 不应按 type-4 吞掉标题: {t4l_err}")
+
+        type7_in_para = Path(tmp) / "type7-in-para-pack"
+        write_mini_theme(type7_in_para)
+        t7p = (type7_in_para / "THEME.md").read_text(encoding="utf-8")
+        t7p = t7p.replace("## 结构模型\n", "前言文字\n<x>\n## 结构模型\n")
+        (type7_in_para / "THEME.md").write_text(t7p, encoding="utf-8")
+        t7p_err, _ = lint_theme.lint_theme(type7_in_para, schema)
+        assert_true(not t7p_err, f"段落中的 type-7 标签不应吞掉后续标题: {t7p_err}")
+
+        search_block = Path(tmp) / "search-block-pack"
+        write_mini_theme(search_block)
+        seb = (search_block / "THEME.md").read_text(encoding="utf-8")
+        seb = seb.replace("## 结构模型\n", "<search foo=>\n## 结构模型\n")
+        (search_block / "THEME.md").write_text(seb, encoding="utf-8")
+        seb_err, _ = lint_theme.lint_theme(search_block, schema)
+        assert_true(
+            any("结构模型" in e for e in seb_err),
+            f"<search foo=> 应按 type-6 吞掉标题: {seb_err}",
+        )
+
+        html_slot_heading = Path(tmp) / "html-slot-heading-pack"
+        write_mini_theme(html_slot_heading)
+        hsh = (html_slot_heading / "THEME.md").read_text(encoding="utf-8")
+        hsh = hsh.replace(
+            "## 文章骨架\n",
+            "<div>\n### slot:bogus\n</div>\n\n## 文章骨架\n",
+        )
+        (html_slot_heading / "THEME.md").write_text(hsh, encoding="utf-8")
+        hsh_err, _ = lint_theme.lint_theme(html_slot_heading, schema)
+        assert_true(
+            not any("slot:bogus" in e for e in hsh_err),
+            f"HTML 块里的 ### slot: 不应当成组件标题: {hsh_err}",
         )
 
         type1_mismatch = Path(tmp) / "type1-mismatch-pack"
@@ -1522,6 +1613,15 @@ def main() -> int:
         assert_true(
             any("style" in msg.lower() and ("h4" in msg.lower() or "缺少" in msg) for _, msg in h4_comp),
             f"组件无 style 的 h4 应失败: {h4_comp}",
+        )
+
+        mismatch_h_comp = lint_theme.lint_html_block(
+            '<h1 style="font-size:22px;margin:0;"><span leaf="">一。</h2>二。</span></h1>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("包裹" in msg or "leaf" in msg.lower() for _, msg in mismatch_h_comp),
+            f"主题 HTML 中 </h2> 应闭合 h1: {mismatch_h_comp}",
         )
 
         hyphen_ph = lint_theme.lint_html_block(
