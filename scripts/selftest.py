@@ -399,6 +399,34 @@ def main() -> int:
         f"li 内第一段 p 不应丢掉代码样式: {clp_warn}",
     )
 
+    p_then_quote = styled_root(
+        '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
+        '<span leaf="">一。'
+        '<blockquote style="margin:0 0 16px;font-size:16px;">二。</blockquote>'
+        "</span></p>"
+    )
+    pq_err, _, _ = validate_article.validate(p_then_quote)
+    assert_true(
+        any("包裹" in e or "leaf" in e.lower() for e in pq_err),
+        f"blockquote 隐含闭合 p 后中文不应算已包裹: {pq_err}",
+    )
+
+    pos_comment = (
+        '<section style="position/**/:fixed;max-width:677px;margin:0 auto">'
+        f"{body_p('正文。')}</section>"
+    )
+    pc_err, _, _ = validate_article.validate(pos_comment)
+    assert_true(
+        any("position" in e.lower() or "fixed" in e.lower() for e in pc_err),
+        f"CSS 注释拆开的 position:fixed 应失败: {pc_err}",
+    )
+
+    template_wrap = styled_root(
+        '<template><p style="font-size:16px;margin:0;"><span leaf="">中文。</span></p></template>'
+    )
+    tw_err, _, _ = validate_article.validate(template_wrap)
+    assert_true(any("template" in e.lower() for e in tw_err), f"<template> 应失败: {tw_err}")
+
     base_tag = styled_root(f'{body_p("正文。")}<base href="https://attacker.example/">')
     base_err, _, _ = validate_article.validate(base_tag)
     assert_true(any("base" in e.lower() for e in base_err), f"<base> 应失败: {base_err}")
@@ -632,6 +660,16 @@ def main() -> int:
         hip_err, _ = lint_theme.lint_theme(hidden_input_preview, schema)
         assert_has(hip_err, "slot:footer", "hidden input 的 name 不算预览覆盖")
 
+        closed_dialog_preview = Path(tmp) / "closed-dialog-preview-pack"
+        write_mini_theme(closed_dialog_preview)
+        cdp = (closed_dialog_preview / "preview.html").read_text(encoding="utf-8")
+        (closed_dialog_preview / "preview.html").write_text(
+            cdp.replace("<p>slot:footer</p>", "<dialog><p>slot:footer</p></dialog>"),
+            encoding="utf-8",
+        )
+        cdp_err, _ = lint_theme.lint_theme(closed_dialog_preview, schema)
+        assert_has(cdp_err, "slot:footer", "未 open 的 dialog 里的标记不算覆盖")
+
         split_preview = Path(tmp) / "split-preview-pack"
         write_mini_theme(split_preview)
         slp = (split_preview / "preview.html").read_text(encoding="utf-8")
@@ -667,6 +705,23 @@ def main() -> int:
         assert_true(
             any("slot:footer" in e and "html" in e for e in ef_err),
             f"空 html 围栏不应算作实现: {ef_err}",
+        )
+
+        incomplete_tag_fence = Path(tmp) / "incomplete-tag-fence-pack"
+        write_mini_theme(incomplete_tag_fence)
+        itf = (incomplete_tag_fence / "THEME.md").read_text(encoding="utf-8")
+        itf = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n```html\n<p\n```\n",
+            itf,
+            count=1,
+            flags=re.S,
+        )
+        (incomplete_tag_fence / "THEME.md").write_text(itf, encoding="utf-8")
+        itf_err, _ = lint_theme.lint_theme(incomplete_tag_fence, schema)
+        assert_true(
+            any("slot:footer" in e and "html" in e for e in itf_err),
+            f"未完成的 <p 不应算作 html 实现: {itf_err}",
         )
 
         comment_only_fence = Path(tmp) / "comment-html-fence-pack"
@@ -786,6 +841,33 @@ def main() -> int:
         assert_true(
             any("slot:footer" in e and "html" in e for e in t1_err),
             f"script/pre 等 type-1 HTML 块里的围栏不应算实现: {t1_err}",
+        )
+
+        pi_fence = Path(tmp) / "pi-fence-pack"
+        write_mini_theme(pi_fence)
+        pif = (pi_fence / "THEME.md").read_text(encoding="utf-8")
+        pif = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n<?xml\n```html\n<p style=\"font-size:16px;\"><span leaf=\"\">页脚</span></p>\n```\n?>\n",
+            pif,
+            count=1,
+            flags=re.S,
+        )
+        (pi_fence / "THEME.md").write_text(pif, encoding="utf-8")
+        pif_err, _ = lint_theme.lint_theme(pi_fence, schema)
+        assert_true(
+            any("slot:footer" in e and "html" in e for e in pif_err),
+            f"处理指令块里的围栏不应算实现: {pif_err}",
+        )
+
+        link_comp = lint_theme.lint_html_block(
+            '<link rel="stylesheet" href="https://example.test/theme.css">'
+            '<p style="margin:0;font-size:16px;"><span leaf="">{{footer}}</span></p>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("link" in msg.lower() or "禁止" in msg for _, msg in link_comp),
+            f"组件里的 <link> 应失败: {link_comp}",
         )
 
         unstyled_comp = Path(tmp) / "unstyled-comp-pack"

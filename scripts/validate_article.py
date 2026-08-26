@@ -52,6 +52,7 @@ FORBIDDEN_TAGS = {
     "base": "禁止 <base>，会改写相对链接",
     "plaintext": "禁止 <plaintext>，会破坏预览解析",
     "xmp": "禁止 <xmp>，会破坏预览解析",
+    "template": "禁止 <template>，内容不会渲染",
 }
 STYLE_FORBIDDEN = [
     (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "position fixed/absolute/sticky 不支持"),
@@ -86,6 +87,39 @@ IMPLIED_END_STOP = frozenset({
     "blockquote",
     "html",
     "body",
+})
+P_CLOSING_START = frozenset({
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "details",
+    "div",
+    "dl",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "search",
+    "section",
+    "table",
+    "ul",
 })
 BLOCK_NEED_STYLE = {
     "section",
@@ -129,10 +163,12 @@ RAW_UNSAFE = [
     (re.compile(r"<object\b", re.I), "出现禁止标签"),
     (re.compile(r"<embed\b", re.I), "出现禁止标签"),
     (re.compile(r"<iframe\b", re.I), "出现禁止标签"),
+    (re.compile(r"<link\b", re.I), "外链 <link> 会被过滤"),
     (re.compile(r"<meta\b", re.I), "禁止 <meta>，正文须为可粘贴片段"),
     (re.compile(r"<base\b", re.I), "禁止 <base>，会改写相对链接"),
     (re.compile(r"<plaintext\b", re.I), "禁止 <plaintext>，会破坏预览解析"),
     (re.compile(r"<xmp\b", re.I), "禁止 <xmp>，会破坏预览解析"),
+    (re.compile(r"<template\b", re.I), "禁止 <template>，内容不会渲染"),
     (re.compile(r"</div\b", re.I), "<div> 会被改写，请用 <section>"),
 ]
 
@@ -234,7 +270,9 @@ class ArticleChecker(HTMLParser):
         self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
 
     def _implied_close(self, incoming: str) -> None:
-        targets = IMPLIED_END_ON_START.get(incoming)
+        targets = set(IMPLIED_END_ON_START.get(incoming, ()))
+        if incoming in P_CLOSING_START:
+            targets.add("p")
         if not targets:
             return
         has_target = False
@@ -290,18 +328,19 @@ class ArticleChecker(HTMLParser):
             if lname in URL_ATTRS and is_executable_url(value or ""):
                 self.exec_urls.append(lname)
         for style in styles:
-            normalized = normalize_scheme_text(style)
-            if style and (EXEC_IN_STYLE.search(style) or EXEC_IN_STYLE.search(normalized)):
+            stripped = CSS_COMMENT.sub("", style)
+            normalized = normalize_scheme_text(stripped)
+            if stripped and (EXEC_IN_STYLE.search(stripped) or EXEC_IN_STYLE.search(normalized)):
                 self.exec_urls.append("style")
             for rx, msg in STYLE_FORBIDDEN:
-                if rx.search(style):
+                if rx.search(stripped):
                     self.css_hits.append(msg)
-            for size in FONT_SIZE.findall(style):
+            for size in FONT_SIZE.findall(stripped):
                 if float(size) > 24:
                     self.font_size_hits.append(size)
 
         is_leaf = ltag == "span" and "leaf" in ad
-        is_code = bool(CODE_STYLE.search(effective_style))
+        is_code = bool(CODE_STYLE.search(CSS_COMMENT.sub("", effective_style)))
         if is_leaf:
             self.span_leaf_count += 1
             self.leaf_depth += 1

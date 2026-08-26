@@ -82,7 +82,6 @@ EXEC_IN_STYLE = re.compile(r"javascript\s*:|expression\s*\(|-moz-binding", re.I)
 SKIP_TAGS = {"head", "title", "style", "script"}
 VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
 CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-HTML_ELEMENT = re.compile(r"<[A-Za-z]")
 HTML_TAG_NAME = re.compile(r"^[a-z][a-z0-9-]*$", re.I)
 HTML_COMMENT_OPEN = "<!--"
 HTML_COMMENT_CLOSE = "-->"
@@ -127,6 +126,8 @@ FORBIDDEN_THEME_TAGS = {
     "base": "出现禁止标签",
     "plaintext": "出现禁止标签",
     "xmp": "出现禁止标签",
+    "link": "出现禁止标签",
+    "template": "出现禁止标签",
 }
 THEME_NEED_STYLE = {
     "section",
@@ -169,6 +170,39 @@ IMPLIED_END_STOP = frozenset({
     "blockquote",
     "html",
     "body",
+})
+P_CLOSING_START = frozenset({
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "details",
+    "div",
+    "dl",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "search",
+    "section",
+    "table",
+    "ul",
 })
 THEME_STYLE_CHECKS = [
     (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "禁止 position fixed/absolute/sticky"),
@@ -330,6 +364,13 @@ FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*$")
 HTML_TYPE1_OPEN = re.compile(r"(?i)^ {0,3}<(script|pre|style|textarea)(?:\s|/?>|$)")
 HTML_TYPE1_CLOSE = re.compile(r"(?i)</(script|pre|style|textarea)\s*>")
+HTML_UNTIL_OPEN = [
+    (re.compile(r"^ {0,3}<!--"), "-->"),
+    (re.compile(r"^ {0,3}<\?"), "?>"),
+    (re.compile(r"(?i)^ {0,3}<!\[CDATA\["), "]]>"),
+    (re.compile(r"^ {0,3}<![A-Za-z]"), ">"),
+]
+HTML_TYPE7_LINE = re.compile(r"(?i)^ {0,3}</?[a-z][a-z0-9-]*(?:\s[^<>]*)?\s*/?>\s*$")
 
 
 def data_uri_media_type(value: str) -> str:
@@ -401,8 +442,27 @@ def strip_html_comments(text: str) -> str:
 
 
 def html_body_has_element(body: str) -> bool:
-    """True when a fence contains at least one real HTML tag, not just comments/whitespace."""
-    return bool(HTML_ELEMENT.search(strip_html_comments(body)))
+    """True when a fence parsed into at least one completed start tag."""
+    visible = strip_html_comments(body)
+    counter = _CompletedTagCounter()
+    try:
+        counter.feed(visible)
+        counter.close()
+    except Exception:  # noqa: BLE001
+        return False
+    return counter.starts > 0
+
+
+class _CompletedTagCounter(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.starts = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        self.starts += 1
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.starts += 1
 
 
 def iter_css_declarations(style: str):
@@ -521,6 +581,8 @@ class PreviewMarkerCollector(HTMLParser):
         hidden = hidden or any(inline_style_hides(value or "") for name, value in attrs if name.lower() == "style")
         if ltag == "input" and any(value.lower() == "hidden" for value in attr_values(attrs, "type")):
             hidden = True
+        if ltag == "dialog" and not any(name.lower() == "open" for name, _ in attrs):
+            hidden = True
         skip = self.skip_depth > 0 or ltag in PREVIEW_SKIP_TAGS or hidden
         if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
             self._flush_text()
@@ -580,6 +642,7 @@ def iter_top_level_fences(text: str):
     opener: tuple[int, str, str] | None = None
     html_block = False
     type1: str | None = None
+    until_close: str | None = None
     for line in lines:
         raw = line.rstrip("\r\n")
         if opener is not None:
@@ -596,6 +659,11 @@ def iter_top_level_fences(text: str):
                 type1 = None
             pos += len(line)
             continue
+        if until_close is not None:
+            if until_close in raw:
+                until_close = None
+            pos += len(line)
+            continue
         if html_block:
             if not raw.strip():
                 html_block = False
@@ -609,7 +677,17 @@ def iter_top_level_fences(text: str):
                 type1 = None
             pos += len(line)
             continue
-        if HTML_BLOCK_OPEN.match(raw):
+        started_until = False
+        for rx, closer in HTML_UNTIL_OPEN:
+            if rx.match(raw):
+                if closer not in raw:
+                    until_close = closer
+                started_until = True
+                break
+        if started_until:
+            pos += len(line)
+            continue
+        if HTML_BLOCK_OPEN.match(raw) or HTML_TYPE7_LINE.match(raw):
             html_block = True
             pos += len(line)
             continue
@@ -730,7 +808,9 @@ class ThemeHtmlInspector(HTMLParser):
         self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
 
     def _implied_close(self, incoming: str) -> None:
-        targets = IMPLIED_END_ON_START.get(incoming)
+        targets = set(IMPLIED_END_ON_START.get(incoming, ()))
+        if incoming in P_CLOSING_START:
+            targets.add("p")
         if not targets:
             return
         has_target = False
@@ -773,18 +853,19 @@ class ThemeHtmlInspector(HTMLParser):
             if lname in URL_ATTRS and is_executable_url(value or ""):
                 self._add("ERROR", f"{self.label}: 禁止可执行 URL")
         for style in attr_values(attrs, "style"):
-            normalized = SCHEME_IGNORED.sub("", style)
-            if style and (EXEC_IN_STYLE.search(style) or EXEC_IN_STYLE.search(normalized)):
+            stripped = CSS_COMMENT.sub("", style)
+            normalized = SCHEME_IGNORED.sub("", stripped)
+            if stripped and (EXEC_IN_STYLE.search(stripped) or EXEC_IN_STYLE.search(normalized)):
                 self._add("ERROR", f"{self.label}: style 含可执行内容")
             for rx, msg in THEME_STYLE_CHECKS:
-                if rx.search(style):
+                if rx.search(stripped):
                     self._add("ERROR", f"{self.label}: {msg}")
-            for size in FONT_SIZE.findall(style):
+            for size in FONT_SIZE.findall(stripped):
                 if float(size) > 24:
                     self._add("ERROR", f"{self.label}: font-size {size}px 超过 24px")
-            if FOURSIDE_DASHED.search(style):
+            if FOURSIDE_DASHED.search(stripped):
                 self._has_dashed = True
-            if CENTERED.search(style):
+            if CENTERED.search(stripped):
                 self._has_center = True
         is_leaf = ltag == "span" and "leaf" in ad
         if is_leaf:
@@ -828,6 +909,8 @@ THEME_RAW_UNSAFE = [
     (re.compile(r"<base\b", re.I), "出现禁止标签"),
     (re.compile(r"<plaintext\b", re.I), "出现禁止标签"),
     (re.compile(r"<xmp\b", re.I), "出现禁止标签"),
+    (re.compile(r"<link\b", re.I), "出现禁止标签"),
+    (re.compile(r"<template\b", re.I), "出现禁止标签"),
     (re.compile(r"</div\b", re.I), "出现 <div>，请用 <section>"),
 ]
 
