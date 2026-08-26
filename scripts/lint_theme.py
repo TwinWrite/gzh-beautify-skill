@@ -68,11 +68,11 @@ CENTERED = re.compile(r"text-align\s*:\s*center", re.I)
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
 CJK = re.compile(r"[一-鿿㐀-䶿]")
-PLACEHOLDER = re.compile(r"\{\{[a-z0-9_-]+\}\}", re.I)
+PLACEHOLDER = re.compile(r"\{\{")
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
 PREVIEW_ID_TAIL = re.compile(r"[a-z0-9_-]")
-RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+[.)])\s+`?([a-z][a-z0-9_-]*)`?", re.I)
-RECIPE_PLAIN = re.compile(r"^`?([a-z][a-z0-9_-]*)`?\s*[:：]", re.I)
+RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+[.)])\s+`?([a-z][a-z0-9_-]*)`?\s*[:：]\s*\S", re.I)
+RECIPE_PLAIN = re.compile(r"^`?([a-z][a-z0-9_-]*)`?\s*[:：]\s*\S", re.I)
 EXEC_SCHEME = re.compile(
     r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:|"
     r"^\s*data\s*:\s*(?:text\s*/\s*html|text\s*/\s*javascript|application\s*/\s*(?:javascript|ecmascript))",
@@ -81,7 +81,7 @@ EXEC_SCHEME = re.compile(
 EXEC_IN_STYLE = re.compile(r"javascript\s*:|expression\s*\(|-moz-binding", re.I)
 
 SKIP_TAGS = {"head", "title", "style", "script"}
-VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
+VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr", "param"}
 CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 CSS_IMPORTANT = re.compile(r"!\s*important\s*$", re.I)
 _CSS_HEX = frozenset("0123456789abcdefABCDEF")
@@ -167,6 +167,9 @@ THEME_NEED_STYLE = {
     "img",
     "blockquote",
     "hr",
+    "h4",
+    "h5",
+    "h6",
 }
 LEAF_BLOCK_TAGS = frozenset({
     "address",
@@ -439,6 +442,7 @@ PREVIEW_SKIP_TAGS = {
     "track",
     "area",
     "col",
+    "param",
 }
 PREVIEW_MARKER_ATTRS = {"id", "class", "name"}
 PREVIEW_BLOCK_BREAK = {
@@ -538,7 +542,9 @@ def recipe_entry_ids(section: str) -> set[str]:
         if line.startswith("|"):
             cells = [cell.strip().strip("`") for cell in line.strip("|").split("|")]
             if cells and re.fullmatch(r"[a-z][a-z0-9_-]*", cells[0], re.I):
-                found.add(cells[0].lower())
+                rest = [cell for cell in cells[1:] if cell and not re.fullmatch(r":?-{3,}:?", cell)]
+                if rest:
+                    found.add(cells[0].lower())
             continue
         plain = RECIPE_PLAIN.match(line)
         if plain:
@@ -634,31 +640,60 @@ def normalize_style(style: str) -> str:
 
 
 def is_html_type7_line(raw: str) -> bool:
-    """True when the line is a complete tag, including quoted '>' in attributes."""
+    """True when the line is a complete HTML start or end tag (CommonMark type 7)."""
     match = HTML_TYPE7_TAG.match(raw)
     if not match:
         return False
+    is_end = bool(re.match(r"^ {0,3}</", match.group(0)))
     i = match.end()
     n = len(raw)
-    if i < n and raw[i] not in " \t/>":
-        return False
-    quote = None
+    if is_end:
+        while i < n and raw[i] in " \t":
+            i += 1
+        return i < n and raw[i] == ">" and raw[i + 1 :].strip() == ""
     while i < n:
-        ch = raw[i]
-        if quote:
-            if ch == quote:
-                quote = None
+        while i < n and raw[i] in " \t":
             i += 1
-            continue
-        if ch in "\"'":
-            quote = ch
-            i += 1
-            continue
-        if ch == "<":
+        if i >= n:
             return False
-        if ch == ">":
+        if raw[i] == ">":
             return raw[i + 1 :].strip() == ""
-        i += 1
+        if raw[i] == "/":
+            i += 1
+            while i < n and raw[i] in " \t":
+                i += 1
+            return i < n and raw[i] == ">" and raw[i + 1 :].strip() == ""
+        if raw[i] in "\"'=<":
+            return False
+        while i < n and raw[i] not in " \t\"'=/<>":
+            i += 1
+        if i >= n:
+            return False
+        while i < n and raw[i] in " \t":
+            i += 1
+        if i < n and raw[i] == "=":
+            i += 1
+            while i < n and raw[i] in " \t":
+                i += 1
+            if i >= n:
+                return False
+            if raw[i] in "\"'":
+                quote = raw[i]
+                i += 1
+                while i < n and raw[i] != quote:
+                    i += 1
+                if i >= n:
+                    return False
+                i += 1
+            else:
+                if raw[i] in "\"'=<`>":
+                    return False
+                started = False
+                while i < n and raw[i] not in " \t\"'=<`>":
+                    started = True
+                    i += 1
+                if not started:
+                    return False
     return False
 
 
@@ -680,7 +715,7 @@ def has_css_declaration(style: str) -> bool:
     return False
 
 
-def inline_style_hides(style: str) -> bool:
+def winning_style_tokens(style: str) -> dict[str, str]:
     winning: dict[str, tuple[str, bool]] = {}
     for prop, value in iter_css_declarations(style):
         important = bool(CSS_IMPORTANT.search(value))
@@ -690,20 +725,37 @@ def inline_style_hides(style: str) -> bool:
         if prev is not None and prev[1] and not important:
             continue
         winning[prop] = (token, important)
-    display = winning.get("display", ("", False))[0]
-    if display == "none":
-        return True
-    visibility = winning.get("visibility", ("", False))[0]
-    if visibility == "hidden":
-        return True
-    opacity = winning.get("opacity", ("", False))[0]
-    if not opacity:
+    return {prop: token for prop, (token, _imp) in winning.items()}
+
+
+def _opacity_is_zero(token: str) -> bool:
+    if not token:
         return False
-    raw_token = opacity[:-1] if opacity.endswith("%") else opacity
+    raw_token = token[:-1] if token.endswith("%") else token
     try:
         return float(raw_token) == 0
     except ValueError:
         return False
+
+
+def inline_style_hard_hides(style: str) -> bool:
+    tokens = winning_style_tokens(style)
+    if tokens.get("display") == "none":
+        return True
+    return _opacity_is_zero(tokens.get("opacity", ""))
+
+
+def inline_style_visibility(style: str) -> str | None:
+    vis = winning_style_tokens(style).get("visibility")
+    if vis in {"hidden", "visible", "collapse"}:
+        return vis
+    return None
+
+
+def inline_style_hides(style: str) -> bool:
+    if inline_style_hard_hides(style):
+        return True
+    return inline_style_visibility(style) in {"hidden", "collapse"}
 
 
 def is_real_html_tag(tag: str) -> bool:
@@ -751,10 +803,12 @@ class HtmlBlockScanner:
         self.until_close: str | None = None
         self.html_block = False
 
+    def _type1_closed(self, raw: str, tag: str) -> bool:
+        return bool(re.search(rf"(?i)</{re.escape(tag)}\s*>", raw))
+
     def in_block(self, raw: str) -> bool:
         if self.type1:
-            close_t1 = HTML_TYPE1_CLOSE.search(raw)
-            if close_t1 and close_t1.group(1).lower() == self.type1:
+            if self._type1_closed(raw, self.type1):
                 self.type1 = None
             return True
         if self.until_close is not None:
@@ -768,8 +822,7 @@ class HtmlBlockScanner:
         type1_open = HTML_TYPE1_OPEN.match(raw)
         if type1_open:
             self.type1 = type1_open.group(1).lower()
-            close_t1 = HTML_TYPE1_CLOSE.search(raw)
-            if close_t1 and close_t1.group(1).lower() == self.type1:
+            if self._type1_closed(raw, self.type1):
                 self.type1 = None
             return True
         for rx, closer in HTML_UNTIL_OPEN:
@@ -798,14 +851,7 @@ def strip_html_blocks(text: str) -> str:
 
 def visible_structure_markdown(text: str) -> str:
     """Markdown that survives fences, HTML comments, and raw HTML blocks."""
-    unfenced = strip_html_blocks(unfenced_markdown(text))
-    collector = VisibleMarkdownCollector()
-    try:
-        collector.feed(unfenced)
-        collector.close()
-    except Exception:  # noqa: BLE001
-        return strip_html_comments(unfenced)
-    return "".join(collector.parts)
+    return strip_html_comments(strip_html_blocks(unfenced_markdown(text)))
 
 
 def has_preview_marker(haystack: str, ident: str, *prefixes: str) -> bool:
@@ -830,8 +876,9 @@ class PreviewMarkerCollector(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.stack: list[tuple[str, bool, bool, bool]] = []
+        self.stack: list[tuple[str, bool, bool, bool, bool]] = []
         self.skip_depth = 0
+        self.vis_hidden_stack: list[bool] = []
         self.text_buf: list[str] = []
         self.chunks: list[str] = []
         self.details_stack: list[dict[str, bool]] = []
@@ -915,11 +962,12 @@ class PreviewMarkerCollector(HTMLParser):
         self._close_nested_anchor(ltag)
         self._clear_table_stack(ltag)
         hidden = any(name.lower() == "hidden" for name, _ in attrs)
-        hidden = hidden or any(inline_style_hides(value or "") for name, value in attrs if name.lower() == "style")
+        style = next((value or "" for name, value in attrs if name.lower() == "style"), "")
+        hard = hidden or inline_style_hard_hides(style)
         if ltag == "input" and any(value.lower() == "hidden" for value in attr_values(attrs, "type")):
-            hidden = True
+            hard = True
         if ltag == "dialog" and not any(name.lower() == "open" for name, _ in attrs):
-            hidden = True
+            hard = True
         state = self.details_stack[-1] if self.details_stack else None
         is_first_summary = (
             ltag == "summary"
@@ -928,7 +976,17 @@ class PreviewMarkerCollector(HTMLParser):
             and not state["used_summary"]
         )
         hide_for_details = state is not None and not state["in_summary"] and not is_first_summary
-        skip = self.skip_depth > 0 or ltag in PREVIEW_SKIP_TAGS or hidden or hide_for_details
+        hard = self.skip_depth > 0 or ltag in PREVIEW_SKIP_TAGS or hard or hide_for_details
+        parent_vis_hidden = self.vis_hidden_stack[-1] if self.vis_hidden_stack else False
+        own_vis = inline_style_visibility(style)
+        if own_vis in {"hidden", "collapse"}:
+            vis_hidden = True
+        elif own_vis == "visible":
+            vis_hidden = False
+        else:
+            vis_hidden = parent_vis_hidden
+        self.vis_hidden_stack.append(vis_hidden)
+        skip = hard or vis_hidden
         if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
             self._flush_text()
         opened_closed_details = ltag == "details" and not any(name.lower() == "open" for name, _ in attrs)
@@ -939,9 +997,11 @@ class PreviewMarkerCollector(HTMLParser):
             opened_summary = True
         if opened_closed_details:
             self.details_stack.append({"in_summary": False, "used_summary": False})
-        self.stack.append((ltag, skip, opened_closed_details, opened_summary))
-        if skip:
+        self.stack.append((ltag, skip, hard, opened_closed_details, opened_summary))
+        if hard:
             self.skip_depth += 1
+            return
+        if vis_hidden:
             return
         for name, value in attrs:
             if not value:
@@ -956,18 +1016,22 @@ class PreviewMarkerCollector(HTMLParser):
             if self.stack[i][0] == ltag:
                 if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
                     self._flush_text()
-                for _, was_skip, opened_closed_details, opened_summary in reversed(self.stack[i:]):
+                for _, _was_skip, was_hard, opened_closed_details, opened_summary in reversed(self.stack[i:]):
                     if opened_summary and self.details_stack:
                         self.details_stack[-1]["in_summary"] = False
                     if opened_closed_details and self.details_stack:
                         self.details_stack.pop()
-                    if was_skip:
+                    if was_hard:
                         self.skip_depth = max(0, self.skip_depth - 1)
+                    if self.vis_hidden_stack:
+                        self.vis_hidden_stack.pop()
                 del self.stack[i:]
                 break
 
     def handle_data(self, data: str) -> None:
         if self.skip_depth:
+            return
+        if self.vis_hidden_stack and self.vis_hidden_stack[-1]:
             return
         self.text_buf.append(data)
 

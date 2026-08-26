@@ -371,6 +371,13 @@ def main() -> int:
         f"leaf 内 blockquote 应失败: {lq_err}",
     )
 
+    unstyled_h4 = styled_root('<h4><span leaf="">中文。</span></h4>')
+    uh4_err, _, _ = validate_article.validate(unstyled_h4)
+    assert_true(
+        any("style" in e.lower() and ("h4" in e.lower() or "缺少" in e) for e in uh4_err),
+        f"无 style 的 h4 应失败: {uh4_err}",
+    )
+
     legacy_image = styled_root(
         '<image style="font-family:monospace;max-width:100%;height:auto;display:block;">'
         + body_p('他说"你好"。')
@@ -678,6 +685,15 @@ def main() -> int:
         named_err, _ = lint_theme.lint_theme(named_recipe, schema)
         assert_has(named_err, "tutorial", "仅提及 tutorial 不算配方")
 
+        name_only_recipe = Path(tmp) / "name-only-recipe-pack"
+        write_mini_theme(name_only_recipe)
+        nord = (name_only_recipe / "THEME.md").read_text(encoding="utf-8")
+        for kind in lint_theme.ARTICLE_TYPES:
+            nord = nord.replace(f"- `{kind}`: hero + h2 + paragraph\n", f"- {kind}\n")
+        (name_only_recipe / "THEME.md").write_text(nord, encoding="utf-8")
+        nord_err, _ = lint_theme.lint_theme(name_only_recipe, schema)
+        assert_has(nord_err, "tutorial", "仅有类型名的列表项不算配方")
+
         plain_recipe = Path(tmp) / "plain-recipe-pack"
         write_mini_theme(plain_recipe)
         prd = (plain_recipe / "THEME.md").read_text(encoding="utf-8")
@@ -943,6 +959,32 @@ def main() -> int:
             f"后声明 display:block 的标记应算覆盖: {dvo_err}",
         )
 
+        vis_override_preview = Path(tmp) / "vis-override-preview-pack"
+        write_mini_theme(vis_override_preview)
+        viso = (vis_override_preview / "preview.html").read_text(encoding="utf-8")
+        (vis_override_preview / "preview.html").write_text(
+            viso.replace(
+                "<p>slot:footer</p>",
+                '<div style="visibility:hidden"><p style="visibility:visible">slot:footer</p></div>',
+            ),
+            encoding="utf-8",
+        )
+        viso_err, _ = lint_theme.lint_theme(vis_override_preview, schema)
+        assert_true(
+            not any("slot:footer" in e for e in viso_err),
+            f"子元素 visibility:visible 应覆盖祖先 hidden: {viso_err}",
+        )
+
+        param_preview = Path(tmp) / "param-preview-pack"
+        write_mini_theme(param_preview)
+        prm = (param_preview / "preview.html").read_text(encoding="utf-8")
+        (param_preview / "preview.html").write_text(
+            prm.replace("<p>slot:footer</p>", '<param id="slot:footer">'),
+            encoding="utf-8",
+        )
+        prm_err, _ = lint_theme.lint_theme(param_preview, schema)
+        assert_has(prm_err, "slot:footer", "param 上的预览标记不算覆盖")
+
         tbody_preview = Path(tmp) / "tbody-preview-pack"
         write_mini_theme(tbody_preview)
         tbp = (tbody_preview / "preview.html").read_text(encoding="utf-8")
@@ -1117,6 +1159,22 @@ def main() -> int:
         (autolink_tight / "THEME.md").write_text(raw_tight, encoding="utf-8")
         tight_err, _ = lint_theme.lint_theme(autolink_tight, schema)
         assert_true(not tight_err, f"自动链接后无空行不应吞掉标题: {tight_err}")
+
+        type7_malformed = Path(tmp) / "type7-malformed-pack"
+        write_mini_theme(type7_malformed)
+        t7m = (type7_malformed / "THEME.md").read_text(encoding="utf-8")
+        t7m = t7m.replace("## 结构模型\n", "<x foo=>\n## 结构模型\n")
+        (type7_malformed / "THEME.md").write_text(t7m, encoding="utf-8")
+        t7m_err, _ = lint_theme.lint_theme(type7_malformed, schema)
+        assert_true(not t7m_err, f"残缺 type-7 标签不应吞掉标题: {t7m_err}")
+
+        type1_mismatch = Path(tmp) / "type1-mismatch-pack"
+        write_mini_theme(type1_mismatch)
+        t1m = (type1_mismatch / "THEME.md").read_text(encoding="utf-8")
+        t1m = t1m.replace("## 结构模型\n", "<script></style></script>\n## 结构模型\n")
+        (type1_mismatch / "THEME.md").write_text(t1m, encoding="utf-8")
+        t1m_err, _ = lint_theme.lint_theme(type1_mismatch, schema)
+        assert_true(not t1m_err, f"同行匹配的 </script> 应结束 type-1 块: {t1m_err}")
 
         selfclose_md = Path(tmp) / "selfclose-md-pack"
         write_mini_theme(selfclose_md)
@@ -1351,6 +1409,15 @@ def main() -> int:
             f"组件缺少 inline style 应失败: {uc_err}",
         )
 
+        h4_comp = lint_theme.lint_html_block(
+            '<h4><span leaf="">中文。</span></h4>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("style" in msg.lower() and ("h4" in msg.lower() or "缺少" in msg) for _, msg in h4_comp),
+            f"组件无 style 的 h4 应失败: {h4_comp}",
+        )
+
         hyphen_ph = lint_theme.lint_html_block(
             '<p style="margin:0">{{author-name}}</p>',
             "### sig:author-name",
@@ -1358,6 +1425,24 @@ def main() -> int:
         assert_true(
             any("占位" in msg or "author-name" in msg for _, msg in hyphen_ph),
             f"带连字符的占位符未包 leaf 应失败: {hyphen_ph}",
+        )
+
+        spaced_ph = lint_theme.lint_html_block(
+            '<p style="margin:0">{{ body }}</p>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("占位" in msg or "leaf" in msg for _, msg in spaced_ph),
+            f"带空格的占位符未包 leaf 应失败: {spaced_ph}",
+        )
+
+        dotted_ph = lint_theme.lint_html_block(
+            '<p style="margin:0">{{body.name}}</p>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("占位" in msg or "leaf" in msg for _, msg in dotted_ph),
+            f"带点号的占位符未包 leaf 应失败: {dotted_ph}",
         )
 
         dup_sig = Path(tmp) / "dup-sig-pack"

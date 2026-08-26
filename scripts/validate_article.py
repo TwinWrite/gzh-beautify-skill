@@ -20,7 +20,7 @@ URL_OR_EMAIL = re.compile(
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
 CODE_STYLE = re.compile(r"monospace|courier|consolas|sf mono", re.I)
 FONT_SIZE = re.compile(r"font-size\s*:\s*(\d+(?:\.\d+)?)px", re.I)
-PLACEHOLDER = re.compile(r"\{\{[a-z0-9_-]+\}\}", re.I)
+PLACEHOLDER = re.compile(r"\{\{")
 EXEC_SCHEME = re.compile(
     r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:|"
     r"^\s*data\s*:\s*(?:text\s*/\s*html|text\s*/\s*javascript|application\s*/\s*(?:javascript|ecmascript))",
@@ -29,7 +29,7 @@ EXEC_SCHEME = re.compile(
 EXEC_IN_STYLE = re.compile(r"javascript\s*:|expression\s*\(|-moz-binding", re.I)
 
 SKIP_TAGS = {"head", "title", "style", "script"}
-VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
+VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr", "param"}
 
 
 def html_tag_name(tag: str) -> str:
@@ -191,6 +191,9 @@ BLOCK_NEED_STYLE = {
     "img",
     "blockquote",
     "hr",
+    "h4",
+    "h5",
+    "h6",
 }
 LEAF_BLOCK_TAGS = frozenset({
     "address",
