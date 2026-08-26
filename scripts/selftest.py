@@ -391,6 +391,18 @@ def main() -> int:
         f"省略 </li> 时后一项中文不应算已包裹: {ili_err}",
     )
 
+    li_in_quote = styled_root(
+        '<ul style="margin:0 0 16px;padding-left:1.4em;">'
+        '<li style="margin:0;font-size:16px;"><blockquote style="margin:0;font-size:16px;">'
+        '<span leaf="">一。'
+        '<li style="margin:0;font-size:16px;">二。</li></ul>'
+    )
+    liq_err, _, _ = validate_article.validate(li_in_quote)
+    assert_true(
+        any("包裹" in e or "leaf" in e.lower() for e in liq_err),
+        f"blockquote 内省略 </li> 后中文不应算已包裹: {liq_err}",
+    )
+
     code_li_p = styled_root(
         '<ul style="margin:0 0 16px;padding-left:1.4em;">'
         '<li style="margin:0;font-family:Consolas,Monaco,monospace;font-size:13px;">'
@@ -453,6 +465,15 @@ def main() -> int:
     )
     tw_err, _, _ = validate_article.validate(template_wrap)
     assert_true(any("template" in e.lower() for e in tw_err), f"<template> 应失败: {tw_err}")
+
+    select_wrap = styled_root(
+        '<select><option><span leaf="">中文。</span></option></select>'
+    )
+    sel_err, _, _ = validate_article.validate(select_wrap)
+    assert_true(
+        any("select" in e.lower() or "option" in e.lower() for e in sel_err),
+        f"<select>/<option> 应失败: {sel_err}",
+    )
 
     base_tag = styled_root(f'{body_p("正文。")}<base href="https://attacker.example/">')
     base_err, _, _ = validate_article.validate(base_tag)
@@ -719,6 +740,29 @@ def main() -> int:
         cdt_err, _ = lint_theme.lint_theme(closed_details_preview, schema)
         assert_has(cdt_err, "slot:footer", "关闭的 details 里非 summary 标记不算覆盖")
 
+        second_summary_preview = Path(tmp) / "second-summary-preview-pack"
+        write_mini_theme(second_summary_preview)
+        ssp = (second_summary_preview / "preview.html").read_text(encoding="utf-8")
+        (second_summary_preview / "preview.html").write_text(
+            ssp.replace(
+                "<p>slot:footer</p>",
+                "<details><summary>More</summary><summary>slot:footer</summary></details>",
+            ),
+            encoding="utf-8",
+        )
+        ssp_err, _ = lint_theme.lint_theme(second_summary_preview, schema)
+        assert_has(ssp_err, "slot:footer", "关闭 details 的第二个 summary 不算覆盖")
+
+        meta_preview = Path(tmp) / "meta-preview-pack"
+        write_mini_theme(meta_preview)
+        mpv = (meta_preview / "preview.html").read_text(encoding="utf-8")
+        (meta_preview / "preview.html").write_text(
+            mpv.replace("<p>slot:footer</p>", '<meta name="slot:footer">'),
+            encoding="utf-8",
+        )
+        mpv_err, _ = lint_theme.lint_theme(meta_preview, schema)
+        assert_has(mpv_err, "slot:footer", "meta 上的预览标记不算覆盖")
+
         implied_hidden_p_preview = Path(tmp) / "implied-hidden-p-preview-pack"
         write_mini_theme(implied_hidden_p_preview)
         ihp = (implied_hidden_p_preview / "preview.html").read_text(encoding="utf-8")
@@ -956,6 +1000,44 @@ def main() -> int:
         assert_true(
             any("position" in msg.lower() or "fixed" in msg.lower() for _, msg in escape_comp),
             f"组件 CSS 转义 position:fixed 应失败: {escape_comp}",
+        )
+
+        leaf_block_comp = lint_theme.lint_html_block(
+            '<span leaf=""><p style="margin:0">中文。</p></span>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("leaf" in msg and "块" in msg for _, msg in leaf_block_comp),
+            f"组件 leaf 内块级标签应失败: {leaf_block_comp}",
+        )
+
+        select_comp = lint_theme.lint_html_block(
+            '<select><option><span leaf="">中文。</span></option></select>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("select" in msg.lower() or "option" in msg.lower() for _, msg in select_comp),
+            f"组件 <select> 应失败: {select_comp}",
+        )
+
+        doc_comp = lint_theme.lint_html_block(
+            '<html><body><p style="margin:0"><span leaf="">中文。</span></p></body></html>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("html" in msg.lower() or "body" in msg.lower() for _, msg in doc_comp),
+            f"组件文档壳 html/body 应失败: {doc_comp}",
+        )
+
+        li_quote_comp = lint_theme.lint_html_block(
+            '<ul style="margin:0;"><li style="margin:0;font-size:16px;">'
+            '<blockquote style="margin:0;font-size:16px;"><span leaf="">一。'
+            '<li style="margin:0;font-size:16px;">二。</li></ul>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("leaf" in msg or "未包" in msg for _, msg in li_quote_comp),
+            f"组件 blockquote 内省略 </li> 应失败: {li_quote_comp}",
         )
 
         link_comp = lint_theme.lint_html_block(

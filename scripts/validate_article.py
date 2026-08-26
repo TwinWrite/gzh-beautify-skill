@@ -53,6 +53,9 @@ FORBIDDEN_TAGS = {
     "plaintext": "禁止 <plaintext>，会破坏预览解析",
     "xmp": "禁止 <xmp>，会破坏预览解析",
     "template": "禁止 <template>，内容不会渲染",
+    "select": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
+    "option": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
+    "optgroup": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
 }
 STYLE_FORBIDDEN = [
     (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "position fixed/absolute/sticky 不支持"),
@@ -87,6 +90,20 @@ IMPLIED_END_STOP = frozenset({
     "blockquote",
     "html",
     "body",
+})
+LIST_ITEM_SCOPE_STOP = frozenset({
+    "ul",
+    "ol",
+    "html",
+    "body",
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "td",
+    "th",
+    "caption",
+    "template",
 })
 P_CLOSING_START = frozenset({
     "address",
@@ -163,6 +180,7 @@ BLOCK_NEED_STYLE = {
     "blockquote",
     "hr",
 }
+LEAF_BLOCK_TAGS = frozenset({"section", "div", "p", "h1", "h2", "h3", "table", "ul", "ol"})
 URL_ATTRS = {
     "href",
     "src",
@@ -194,6 +212,9 @@ RAW_UNSAFE = [
     (re.compile(r"<plaintext\b", re.I), "禁止 <plaintext>，会破坏预览解析"),
     (re.compile(r"<xmp\b", re.I), "禁止 <xmp>，会破坏预览解析"),
     (re.compile(r"<template\b", re.I), "禁止 <template>，内容不会渲染"),
+    (re.compile(r"<select\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
+    (re.compile(r"<option\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
+    (re.compile(r"<optgroup\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
     (re.compile(r"</div\b", re.I), "<div> 会被改写，请用 <section>"),
 ]
 
@@ -345,9 +366,10 @@ class ArticleChecker(HTMLParser):
             targets.add("p")
         if not targets:
             return
+        stop = LIST_ITEM_SCOPE_STOP if incoming == "li" else IMPLIED_END_STOP
         has_target = False
         for tag, *_rest in reversed(self.stack):
-            if tag in IMPLIED_END_STOP:
+            if tag in stop:
                 break
             if tag in targets:
                 has_target = True
@@ -356,7 +378,7 @@ class ArticleChecker(HTMLParser):
             return
         while self.stack:
             top = self.stack[-1][0]
-            if top in IMPLIED_END_STOP:
+            if top in stop:
                 return
             self.handle_endtag(top)
             if top in targets:
@@ -426,7 +448,7 @@ class ArticleChecker(HTMLParser):
             self.leaf_depth += 1
         if is_code:
             self.code_depth += 1
-        if self.leaf_depth and ltag in {"section", "div", "p", "h1", "h2", "h3", "table", "ul", "ol"}:
+        if self.leaf_depth and ltag in LEAF_BLOCK_TAGS:
             self.leaf_has_block = True
         if not void:
             self.stack.append((ltag, is_leaf, is_code))

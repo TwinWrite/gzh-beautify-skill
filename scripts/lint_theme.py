@@ -131,6 +131,12 @@ FORBIDDEN_THEME_TAGS = {
     "xmp": "出现禁止标签",
     "link": "出现禁止标签",
     "template": "出现禁止标签",
+    "html": "出现 <html>/<head>/<body>，组件须为可粘贴片段",
+    "head": "出现 <html>/<head>/<body>，组件须为可粘贴片段",
+    "body": "出现 <html>/<head>/<body>，组件须为可粘贴片段",
+    "select": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
+    "option": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
+    "optgroup": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
 }
 THEME_NEED_STYLE = {
     "section",
@@ -151,6 +157,7 @@ THEME_NEED_STYLE = {
     "blockquote",
     "hr",
 }
+LEAF_BLOCK_TAGS = frozenset({"section", "div", "p", "h1", "h2", "h3", "table", "ul", "ol"})
 IMPLIED_END_ON_START = {
     "li": frozenset({"li"}),
     "dt": frozenset({"dt", "dd"}),
@@ -173,6 +180,20 @@ IMPLIED_END_STOP = frozenset({
     "blockquote",
     "html",
     "body",
+})
+LIST_ITEM_SCOPE_STOP = frozenset({
+    "ul",
+    "ol",
+    "html",
+    "body",
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "td",
+    "th",
+    "caption",
+    "template",
 })
 P_CLOSING_START = frozenset({
     "address",
@@ -346,7 +367,7 @@ def find_theme_dirs(target: Path) -> list[Path]:
 
 
 ACTIVE_DATA_TOKEN = re.compile(r"(?:html|svg|xml|javascript|ecmascript)", re.I)
-PREVIEW_SKIP_TAGS = {"head", "title", "style", "script", "noscript", "template"}
+PREVIEW_SKIP_TAGS = {"head", "title", "style", "script", "noscript", "template", "meta", "link", "base"}
 PREVIEW_MARKER_ATTRS = {"id", "class", "name"}
 PREVIEW_BLOCK_BREAK = {
     "p",
@@ -663,7 +684,7 @@ class PreviewMarkerCollector(HTMLParser):
         self.skip_depth = 0
         self.text_buf: list[str] = []
         self.chunks: list[str] = []
-        self.details_stack: list[bool] = []
+        self.details_stack: list[dict[str, bool]] = []
 
     def _flush_text(self) -> None:
         if self.text_buf:
@@ -684,9 +705,10 @@ class PreviewMarkerCollector(HTMLParser):
             targets.add("p")
         if not targets:
             return
+        stop = LIST_ITEM_SCOPE_STOP if incoming == "li" else IMPLIED_END_STOP
         has_target = False
         for tag, *_rest in reversed(self.stack):
-            if tag in IMPLIED_END_STOP:
+            if tag in stop:
                 break
             if tag in targets:
                 has_target = True
@@ -695,7 +717,7 @@ class PreviewMarkerCollector(HTMLParser):
             return
         while self.stack:
             top = self.stack[-1][0]
-            if top in IMPLIED_END_STOP:
+            if top in stop:
                 return
             self.handle_endtag(top)
             if top in targets:
@@ -720,17 +742,25 @@ class PreviewMarkerCollector(HTMLParser):
             hidden = True
         if ltag == "dialog" and not any(name.lower() == "open" for name, _ in attrs):
             hidden = True
-        hide_for_details = bool(self.details_stack) and not self.details_stack[-1] and ltag != "summary"
+        state = self.details_stack[-1] if self.details_stack else None
+        is_first_summary = (
+            ltag == "summary"
+            and state is not None
+            and not state["in_summary"]
+            and not state["used_summary"]
+        )
+        hide_for_details = state is not None and not state["in_summary"] and not is_first_summary
         skip = self.skip_depth > 0 or ltag in PREVIEW_SKIP_TAGS or hidden or hide_for_details
         if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
             self._flush_text()
         opened_closed_details = ltag == "details" and not any(name.lower() == "open" for name, _ in attrs)
         opened_summary = False
-        if ltag == "summary" and self.details_stack and not self.details_stack[-1]:
-            self.details_stack[-1] = True
+        if is_first_summary and state is not None:
+            state["in_summary"] = True
+            state["used_summary"] = True
             opened_summary = True
         if opened_closed_details:
-            self.details_stack.append(False)
+            self.details_stack.append({"in_summary": False, "used_summary": False})
         self.stack.append((ltag, skip, opened_closed_details, opened_summary))
         if skip:
             self.skip_depth += 1
@@ -750,7 +780,7 @@ class PreviewMarkerCollector(HTMLParser):
                     self._flush_text()
                 for _, was_skip, opened_closed_details, opened_summary in reversed(self.stack[i:]):
                     if opened_summary and self.details_stack:
-                        self.details_stack[-1] = False
+                        self.details_stack[-1]["in_summary"] = False
                     if opened_closed_details and self.details_stack:
                         self.details_stack.pop()
                     if was_skip:
@@ -962,9 +992,10 @@ class ThemeHtmlInspector(HTMLParser):
             targets.add("p")
         if not targets:
             return
+        stop = LIST_ITEM_SCOPE_STOP if incoming == "li" else IMPLIED_END_STOP
         has_target = False
         for tag, *_rest in reversed(self.stack):
-            if tag in IMPLIED_END_STOP:
+            if tag in stop:
                 break
             if tag in targets:
                 has_target = True
@@ -973,7 +1004,7 @@ class ThemeHtmlInspector(HTMLParser):
             return
         while self.stack:
             top = self.stack[-1][0]
-            if top in IMPLIED_END_STOP:
+            if top in stop:
                 return
             self.handle_endtag(top)
             if top in targets:
@@ -1029,6 +1060,8 @@ class ThemeHtmlInspector(HTMLParser):
         is_leaf = ltag == "span" and "leaf" in ad
         if is_leaf:
             self.leaf_depth += 1
+        if self.leaf_depth and ltag in LEAF_BLOCK_TAGS:
+            self._add("ERROR", f"{self.label}: span[leaf] 内出现块级标签")
         if not void:
             self.stack.append((ltag, is_leaf))
 
@@ -1070,6 +1103,12 @@ THEME_RAW_UNSAFE = [
     (re.compile(r"<xmp\b", re.I), "出现禁止标签"),
     (re.compile(r"<link\b", re.I), "出现禁止标签"),
     (re.compile(r"<template\b", re.I), "出现禁止标签"),
+    (re.compile(r"<select\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
+    (re.compile(r"<option\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
+    (re.compile(r"<optgroup\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
+    (re.compile(r"<html\b", re.I), "出现 <html>/<head>/<body>，组件须为可粘贴片段"),
+    (re.compile(r"<head\b", re.I), "出现 <html>/<head>/<body>，组件须为可粘贴片段"),
+    (re.compile(r"<body\b", re.I), "出现 <html>/<head>/<body>，组件须为可粘贴片段"),
     (re.compile(r"</div\b", re.I), "出现 <div>，请用 <section>"),
 ]
 
