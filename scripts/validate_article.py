@@ -56,6 +56,9 @@ FORBIDDEN_TAGS = {
     "select": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
     "option": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
     "optgroup": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
+    "dialog": "禁止 <dialog>/<details>/<noscript>，内容默认不渲染",
+    "details": "禁止 <dialog>/<details>/<noscript>，内容默认不渲染",
+    "noscript": "禁止 <dialog>/<details>/<noscript>，内容默认不渲染",
 }
 STYLE_FORBIDDEN = [
     (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "position fixed/absolute/sticky 不支持"),
@@ -219,6 +222,9 @@ RAW_UNSAFE = [
     (re.compile(r"<select\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
     (re.compile(r"<option\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
     (re.compile(r"<optgroup\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
+    (re.compile(r"<dialog\b", re.I), "禁止 <dialog>/<details>/<noscript>，内容默认不渲染"),
+    (re.compile(r"<details\b", re.I), "禁止 <dialog>/<details>/<noscript>，内容默认不渲染"),
+    (re.compile(r"<noscript\b", re.I), "禁止 <dialog>/<details>/<noscript>，内容默认不渲染"),
     (re.compile(r"</div\b", re.I), "<div> 会被改写，请用 <section>"),
 ]
 
@@ -477,7 +483,7 @@ class ArticleChecker(HTMLParser):
         if is_leaf:
             self.span_leaf_count += 1
             self.leaf_depth += 1
-        if is_code:
+        if is_code and not void:
             self.code_depth += 1
         if self.leaf_depth and ltag in LEAF_BLOCK_TAGS:
             self.leaf_has_block = True

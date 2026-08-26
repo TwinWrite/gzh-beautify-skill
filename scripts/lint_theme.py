@@ -137,6 +137,9 @@ FORBIDDEN_THEME_TAGS = {
     "select": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
     "option": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
     "optgroup": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
+    "dialog": "禁止 <dialog>/<details>/<noscript>，内容默认不渲染",
+    "details": "禁止 <dialog>/<details>/<noscript>，内容默认不渲染",
+    "noscript": "禁止 <dialog>/<details>/<noscript>，内容默认不渲染",
 }
 THEME_NEED_STYLE = {
     "section",
@@ -619,8 +622,11 @@ def inline_style_hides(style: str) -> bool:
         if prop == "visibility" and token == "hidden":
             return True
         if prop == "opacity":
+            raw_token = token
+            if raw_token.endswith("%"):
+                raw_token = raw_token[:-1]
             try:
-                if float(token) == 0:
+                if float(raw_token) == 0:
                     return True
             except ValueError:
                 pass
@@ -1178,6 +1184,9 @@ THEME_RAW_UNSAFE = [
     (re.compile(r"<select\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
     (re.compile(r"<option\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
     (re.compile(r"<optgroup\b", re.I), "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]"),
+    (re.compile(r"<dialog\b", re.I), "禁止 <dialog>/<details>/<noscript>，内容默认不渲染"),
+    (re.compile(r"<details\b", re.I), "禁止 <dialog>/<details>/<noscript>，内容默认不渲染"),
+    (re.compile(r"<noscript\b", re.I), "禁止 <dialog>/<details>/<noscript>，内容默认不渲染"),
     (re.compile(r"<html\b", re.I), "出现 <html>/<head>/<body>，组件须为可粘贴片段"),
     (re.compile(r"<head\b", re.I), "出现 <html>/<head>/<body>，组件须为可粘贴片段"),
     (re.compile(r"<body\b", re.I), "出现 <html>/<head>/<body>，组件须为可粘贴片段"),

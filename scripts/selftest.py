@@ -496,6 +496,46 @@ def main() -> int:
         f"<select>/<option> 应失败: {sel_err}",
     )
 
+    dialog_wrap = styled_root(
+        '<dialog style="margin:0;font-size:16px;"><p style="margin:0;font-size:16px;">'
+        '<span leaf="">中文。</span></p></dialog>'
+    )
+    dlg_err, _, _ = validate_article.validate(dialog_wrap)
+    assert_true(
+        any("dialog" in e.lower() or "details" in e.lower() or "noscript" in e.lower() for e in dlg_err),
+        f"<dialog> 应失败: {dlg_err}",
+    )
+
+    details_wrap = styled_root(
+        '<details style="margin:0;font-size:16px;"><summary style="font-size:16px;">'
+        '<span leaf="">中文。</span></summary></details>'
+    )
+    det_err, _, _ = validate_article.validate(details_wrap)
+    assert_true(
+        any("dialog" in e.lower() or "details" in e.lower() or "noscript" in e.lower() for e in det_err),
+        f"<details> 应失败: {det_err}",
+    )
+
+    noscript_wrap = styled_root(
+        '<noscript><p style="margin:0;font-size:16px;"><span leaf="">中文。</span></p></noscript>'
+    )
+    ns_err, _, _ = validate_article.validate(noscript_wrap)
+    assert_true(
+        any("dialog" in e.lower() or "details" in e.lower() or "noscript" in e.lower() for e in ns_err),
+        f"<noscript> 应失败: {ns_err}",
+    )
+
+    void_code_img = styled_root(
+        '<img src="https://example.test/a.png" '
+        'style="font-family:monospace;max-width:100%;height:auto;display:block;">'
+        + body_p('他说"你好"。')
+    )
+    _, vci_warn, _ = validate_article.validate(void_code_img)
+    assert_true(
+        any("半角" in w for w in vci_warn),
+        f"void 等宽标签不应把后续正文当代码: {vci_warn}",
+    )
+
     base_tag = styled_root(f'{body_p("正文。")}<base href="https://attacker.example/">')
     base_err, _, _ = validate_article.validate(base_tag)
     assert_true(any("base" in e.lower() for e in base_err), f"<base> 应失败: {base_err}")
@@ -814,6 +854,16 @@ def main() -> int:
         opp_err, _ = lint_theme.lint_theme(opacity_preview, schema)
         assert_has(opp_err, "slot:footer", "opacity:0 的预览标记不算覆盖")
 
+        opacity_pct_preview = Path(tmp) / "opacity-pct-preview-pack"
+        write_mini_theme(opacity_pct_preview)
+        oppp = (opacity_pct_preview / "preview.html").read_text(encoding="utf-8")
+        (opacity_pct_preview / "preview.html").write_text(
+            oppp.replace("<p>slot:footer</p>", '<p style="opacity:0%">slot:footer</p>'),
+            encoding="utf-8",
+        )
+        oppp_err, _ = lint_theme.lint_theme(opacity_pct_preview, schema)
+        assert_has(oppp_err, "slot:footer", "opacity:0% 的预览标记不算覆盖")
+
         tbody_preview = Path(tmp) / "tbody-preview-pack"
         write_mini_theme(tbody_preview)
         tbp = (tbody_preview / "preview.html").read_text(encoding="utf-8")
@@ -1096,6 +1146,35 @@ def main() -> int:
         assert_true(
             any("select" in msg.lower() or "option" in msg.lower() for _, msg in select_comp),
             f"组件 <select> 应失败: {select_comp}",
+        )
+
+        dialog_comp = lint_theme.lint_html_block(
+            '<dialog style="margin:0;font-size:16px;"><p style="margin:0;font-size:16px;">'
+            '<span leaf="">中文。</span></p></dialog>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("dialog" in msg.lower() or "details" in msg.lower() or "noscript" in msg.lower() for _, msg in dialog_comp),
+            f"组件 <dialog> 应失败: {dialog_comp}",
+        )
+
+        details_comp = lint_theme.lint_html_block(
+            '<details style="margin:0;font-size:16px;"><summary style="font-size:16px;">'
+            '<span leaf="">中文。</span></summary></details>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("dialog" in msg.lower() or "details" in msg.lower() or "noscript" in msg.lower() for _, msg in details_comp),
+            f"组件 <details> 应失败: {details_comp}",
+        )
+
+        noscript_comp = lint_theme.lint_html_block(
+            '<noscript><p style="margin:0;font-size:16px;"><span leaf="">{{footer}}</span></p></noscript>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("dialog" in msg.lower() or "details" in msg.lower() or "noscript" in msg.lower() for _, msg in noscript_comp),
+            f"组件 <noscript> 应失败: {noscript_comp}",
         )
 
         doc_comp = lint_theme.lint_html_block(
