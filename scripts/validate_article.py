@@ -503,7 +503,14 @@ class ArticleChecker(HTMLParser):
                         self.code_depth -= 1
                 del self.stack[i:]
                 break
-        if not matched and ltag in FORBIDDEN_TAGS:
+        if matched:
+            return
+        if ltag == "p":
+            # HTML tree builder inserts an empty <p> for a stray </p>, then closes it.
+            self._open("p", [], void=False)
+            self.handle_endtag("p")
+            return
+        if ltag in FORBIDDEN_TAGS:
             self.tag_hits[ltag] += 1
 
     def handle_data(self, data: str) -> None:

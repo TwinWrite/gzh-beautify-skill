@@ -347,6 +347,13 @@ def main() -> int:
     pr_err, _, _ = validate_article.validate(p_root)
     assert_true(any("section" in e for e in pr_err), f"非 section 根节点应失败: {pr_err}")
 
+    stray_p = styled_root(body_p("正文。")) + "</p>"
+    stray_p_err, _, _ = validate_article.validate(stray_p)
+    assert_true(
+        any("顶层" in e or "section" in e for e in stray_p_err),
+        f"根 section 后的游离 </p> 应失败: {stray_p_err}",
+    )
+
     selfclose_leaf = styled_root(
         '<span leaf=""/ ></span>'
         '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">中文。</p>'
@@ -844,6 +851,16 @@ def main() -> int:
         mpv_err, _ = lint_theme.lint_theme(meta_preview, schema)
         assert_has(mpv_err, "slot:footer", "meta 上的预览标记不算覆盖")
 
+        source_preview = Path(tmp) / "source-preview-pack"
+        write_mini_theme(source_preview)
+        srcp = (source_preview / "preview.html").read_text(encoding="utf-8")
+        (source_preview / "preview.html").write_text(
+            srcp.replace("<p>slot:footer</p>", '<source id="slot:footer">'),
+            encoding="utf-8",
+        )
+        srcp_err, _ = lint_theme.lint_theme(source_preview, schema)
+        assert_has(srcp_err, "slot:footer", "source 上的预览标记不算覆盖")
+
         opacity_preview = Path(tmp) / "opacity-preview-pack"
         write_mini_theme(opacity_preview)
         opp = (opacity_preview / "preview.html").read_text(encoding="utf-8")
@@ -977,7 +994,8 @@ def main() -> int:
         html_wrapped_md = Path(tmp) / "html-wrapped-md-pack"
         write_mini_theme(html_wrapped_md)
         raw_wrapped = (html_wrapped_md / "THEME.md").read_text(encoding="utf-8")
-        (html_wrapped_md / "THEME.md").write_text(f"<div>\n{raw_wrapped}\n</div>\n", encoding="utf-8")
+        compact = "\n".join(line for line in raw_wrapped.splitlines() if line.strip())
+        (html_wrapped_md / "THEME.md").write_text(f"<div>\n{compact}\n</div>\n", encoding="utf-8")
         wrapped_err, _ = lint_theme.lint_theme(html_wrapped_md, schema)
         assert_true(
             any("缺少章节" in e or "缺少 ### slot:" in e for e in wrapped_err),
@@ -993,6 +1011,17 @@ def main() -> int:
         assert_true(
             any("结构模型" in e for e in uem_err),
             f"未匹配 </span> 不应露出 HTML 块里的标题: {uem_err}",
+        )
+
+        matched_section_md = Path(tmp) / "matched-section-md-pack"
+        write_mini_theme(matched_section_md)
+        msm = (matched_section_md / "THEME.md").read_text(encoding="utf-8")
+        msm = msm.replace("## 结构模型\n", "<section>\n</section>\n## 结构模型\n")
+        (matched_section_md / "THEME.md").write_text(msm, encoding="utf-8")
+        msm_err, _ = lint_theme.lint_theme(matched_section_md, schema)
+        assert_true(
+            any("结构模型" in e for e in msm_err),
+            f"配对 </section> 不应结束 type-6 HTML 块: {msm_err}",
         )
 
         html_block_fence = Path(tmp) / "html-block-fence-pack"

@@ -374,7 +374,21 @@ def find_theme_dirs(target: Path) -> list[Path]:
 
 
 ACTIVE_DATA_TOKEN = re.compile(r"(?:html|svg|xml|javascript|ecmascript)", re.I)
-PREVIEW_SKIP_TAGS = {"head", "title", "style", "script", "noscript", "template", "meta", "link", "base"}
+PREVIEW_SKIP_TAGS = {
+    "head",
+    "title",
+    "style",
+    "script",
+    "noscript",
+    "template",
+    "meta",
+    "link",
+    "base",
+    "source",
+    "track",
+    "area",
+    "col",
+}
 PREVIEW_MARKER_ATTRS = {"id", "class", "name"}
 PREVIEW_BLOCK_BREAK = {
     "p",
@@ -670,9 +684,62 @@ class VisibleMarkdownCollector(HTMLParser):
         return
 
 
+class HtmlBlockScanner:
+    """CommonMark HTML-block state: type-6/7 last until a blank line, not a matching end tag."""
+
+    def __init__(self) -> None:
+        self.type1: str | None = None
+        self.until_close: str | None = None
+        self.html_block = False
+
+    def in_block(self, raw: str) -> bool:
+        if self.type1:
+            close_t1 = HTML_TYPE1_CLOSE.search(raw)
+            if close_t1 and close_t1.group(1).lower() == self.type1:
+                self.type1 = None
+            return True
+        if self.until_close is not None:
+            if self.until_close in raw:
+                self.until_close = None
+            return True
+        if self.html_block:
+            if not raw.strip():
+                self.html_block = False
+            return True
+        type1_open = HTML_TYPE1_OPEN.match(raw)
+        if type1_open:
+            self.type1 = type1_open.group(1).lower()
+            close_t1 = HTML_TYPE1_CLOSE.search(raw)
+            if close_t1 and close_t1.group(1).lower() == self.type1:
+                self.type1 = None
+            return True
+        for rx, closer in HTML_UNTIL_OPEN:
+            if rx.match(raw):
+                if closer not in raw:
+                    self.until_close = closer
+                return True
+        if HTML_BLOCK_OPEN.match(raw) or is_html_type7_line(raw):
+            self.html_block = True
+            return True
+        return False
+
+
+def strip_html_blocks(text: str) -> str:
+    """Drop CommonMark HTML block lines; keep markdown that follows a blank line."""
+    scanner = HtmlBlockScanner()
+    out: list[str] = []
+    for line in text.splitlines(keepends=True):
+        raw = line.rstrip("\r\n")
+        if scanner.in_block(raw):
+            out.append("\n" if line.endswith(("\n", "\r")) else "")
+        else:
+            out.append(line)
+    return "".join(out)
+
+
 def visible_structure_markdown(text: str) -> str:
     """Markdown that survives fences, HTML comments, and raw HTML blocks."""
-    unfenced = unfenced_markdown(text)
+    unfenced = strip_html_blocks(unfenced_markdown(text))
     collector = VisibleMarkdownCollector()
     try:
         collector.feed(unfenced)
@@ -870,9 +937,7 @@ def iter_top_level_fences(text: str):
     lines = text.splitlines(keepends=True)
     pos = 0
     opener: tuple[int, str, str] | None = None
-    html_block = False
-    type1: str | None = None
-    until_close: str | None = None
+    html_blocks = HtmlBlockScanner()
     for line in lines:
         raw = line.rstrip("\r\n")
         if opener is not None:
@@ -883,42 +948,7 @@ def iter_top_level_fences(text: str):
                 opener = None
             pos += len(line)
             continue
-        if type1:
-            close_t1 = HTML_TYPE1_CLOSE.search(raw)
-            if close_t1 and close_t1.group(1).lower() == type1:
-                type1 = None
-            pos += len(line)
-            continue
-        if until_close is not None:
-            if until_close in raw:
-                until_close = None
-            pos += len(line)
-            continue
-        if html_block:
-            if not raw.strip():
-                html_block = False
-            pos += len(line)
-            continue
-        type1_open = HTML_TYPE1_OPEN.match(raw)
-        if type1_open:
-            type1 = type1_open.group(1).lower()
-            close_t1 = HTML_TYPE1_CLOSE.search(raw)
-            if close_t1 and close_t1.group(1).lower() == type1:
-                type1 = None
-            pos += len(line)
-            continue
-        started_until = False
-        for rx, closer in HTML_UNTIL_OPEN:
-            if rx.match(raw):
-                if closer not in raw:
-                    until_close = closer
-                started_until = True
-                break
-        if started_until:
-            pos += len(line)
-            continue
-        if HTML_BLOCK_OPEN.match(raw) or is_html_type7_line(raw):
-            html_block = True
+        if html_blocks.in_block(raw):
             pos += len(line)
             continue
         open_m = FENCE_OPEN.match(raw)
