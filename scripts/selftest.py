@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -137,6 +138,23 @@ def assert_true(cond: bool, msg: str) -> None:
         raise SystemExit(f"FAIL: {msg}")
 
 
+def assert_has(items: list[str], needle: str, msg: str) -> None:
+    assert_true(any(needle in item for item in items), f"{msg}: {items}")
+
+
+def styled_root(inner: str) -> str:
+    return (
+        '<section style="max-width:677px;margin:0 auto;background:#FFFFFF;color:#1F2937;">'
+        f"{inner}"
+        "</section>"
+    )
+
+
+def body_p(text: str, *, code: bool = False) -> str:
+    font = "font-family:Consolas,Monaco,monospace;font-size:13px;" if code else "font-size:16px;line-height:1.8;"
+    return f'<p style="{font}margin:0 0 16px;color:#1F2937;"><span leaf="">{text}</span></p>'
+
+
 def main() -> int:
     schema = lint_theme.load_schema(ROOT)
 
@@ -155,6 +173,51 @@ def main() -> int:
     assert_true(ok.returncode == 0, f"validate valid 退出码 {ok.returncode}\n{ok.stdout}{ok.stderr}")
     bad = run_cli([sys.executable, str(SCRIPTS / "validate_article.py"), str(SCRIPTS / "testdata" / "invalid_article.html")])
     assert_true(bad.returncode == 1, "validate invalid 应失败")
+
+    grid_in_code = styled_root(body_p("display:grid 示例", code=True))
+    g_err, g_warn, _ = validate_article.validate(grid_in_code)
+    assert_true(not any("grid" in e.lower() for e in g_err), f"代码里的 display:grid 不应报错: {g_err}")
+
+    grid_in_style = (
+        '<section style="display:grid;max-width:677px;margin:0 auto;">'
+        f"{body_p('正文。')}</section>"
+    )
+    gs_err, _, _ = validate_article.validate(grid_in_style)
+    assert_has(gs_err, "grid", "style 里的 display:grid 应报错")
+
+    bare = "<section><p><span leaf=\"\">正文。</span></p></section>"
+    b_err, _, _ = validate_article.validate(bare)
+    assert_true(any("style" in e.lower() for e in b_err), f"无 inline style 应失败: {b_err}")
+
+    mixed = styled_root(body_p("使用 Python, 然后继续。") + body_p("版本 v2.0: 已发布。"))
+    _, m_warn, _ = validate_article.validate(mixed)
+    assert_true(any("半角" in w for w in m_warn), f"拉丁字母后的半角标点应警告: {m_warn}")
+
+    pre = styled_root("<pre style=\"font-size:13px;\"><code>print(1)</code></pre>")
+    p_err, _, _ = validate_article.validate(pre)
+    assert_true(any("pre" in e.lower() or "code" in e.lower() for e in p_err), f"<pre><code> 应失败: {p_err}")
+
+    xss = styled_root(f"{body_p('正文。')}<img src=\"missing\" onerror=\"alert(1)\">")
+    x_err, _, _ = validate_article.validate(xss)
+    assert_true(any("事件" in e or "onerror" in e.lower() for e in x_err), f"onerror 应失败: {x_err}")
+
+    js_link = styled_root(
+        '<p style="font-size:16px;margin:0 0 16px;"><a href="javascript:alert(1)"><span leaf="">点击。</span></a></p>'
+    )
+    j_err, _, _ = validate_article.validate(js_link)
+    assert_true(any("javascript" in e.lower() or "可执行" in e for e in j_err), f"javascript: 应失败: {j_err}")
+
+    wrapped_doc = (
+        "<html><body>"
+        + styled_root(body_p("正文。"))
+        + "</body></html>"
+    )
+    w_err, _, _ = validate_article.validate(wrapped_doc)
+    assert_true(any("html" in e.lower() or "body" in e.lower() or "片段" in e for e in w_err), f"完整文档应失败: {w_err}")
+
+    p_root = body_p("正文。")
+    pr_err, _, _ = validate_article.validate(p_root)
+    assert_true(any("section" in e for e in pr_err), f"非 section 根节点应失败: {pr_err}")
 
     with tempfile.TemporaryDirectory() as tmp:
         preview_out = Path(tmp) / "out.html"
@@ -188,6 +251,58 @@ def main() -> int:
         write_mini_theme(missing, omit_footer=True)
         m_err, _ = lint_theme.lint_theme(missing, schema)
         assert_true(any("footer" in e for e in m_err), f"缺 footer 应失败: {m_err}")
+
+        no_html = Path(tmp) / "no-html-pack"
+        write_mini_theme(no_html)
+        md = (no_html / "THEME.md").read_text(encoding="utf-8")
+        (no_html / "THEME.md").write_text(re.sub(r"```html\n.*?```", "", md, flags=re.S), encoding="utf-8")
+        nh_err, _ = lint_theme.lint_theme(no_html, schema)
+        assert_has(nh_err, "缺少 html 代码块", "槽位无 HTML 围栏应失败")
+
+        empty_sigs = Path(tmp) / "empty-sigs-pack"
+        write_mini_theme(empty_sigs)
+        payload = json.loads((empty_sigs / "theme.json").read_text(encoding="utf-8"))
+        payload["signature_slots"] = []
+        (empty_sigs / "theme.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        es_err, _ = lint_theme.lint_theme(empty_sigs, schema)
+        assert_true(
+            any("signature_slots" in e for e in es_err),
+            f"空 signature_slots 应失败: {es_err}",
+        )
+
+        unwrap = Path(tmp) / "unwrap-pack"
+        write_mini_theme(unwrap)
+        umd = (unwrap / "THEME.md").read_text(encoding="utf-8")
+        (unwrap / "THEME.md").write_text(
+            umd.replace('<span leaf="">{{paragraph}}</span>', '<span leaf="">{{label}}</span>{{body}}', 1),
+            encoding="utf-8",
+        )
+        uw_err, _ = lint_theme.lint_theme(unwrap, schema)
+        assert_true(any("span[leaf]" in e or "未包" in e for e in uw_err), f"未包裹占位应失败: {uw_err}")
+
+        no_preview = Path(tmp) / "no-preview-slot"
+        write_mini_theme(no_preview)
+        preview = (no_preview / "preview.html").read_text(encoding="utf-8")
+        (no_preview / "preview.html").write_text(preview.replace("slot:footer", "slot:missing-footer"), encoding="utf-8")
+        np_err, _ = lint_theme.lint_theme(no_preview, schema)
+        assert_has(np_err, "slot:footer", "预览缺必选槽应失败")
+
+        floated = Path(tmp) / "float-pack"
+        write_mini_theme(floated)
+        fmd = (floated / "THEME.md").read_text(encoding="utf-8")
+        (floated / "THEME.md").write_text(
+            fmd.replace('style="max-width:677px;', 'style="float:left;max-width:677px;', 1),
+            encoding="utf-8",
+        )
+        fl_err, _ = lint_theme.lint_theme(floated, schema)
+        assert_true(any("float" in e.lower() for e in fl_err), f"主题 float 应失败: {fl_err}")
+
+        no_recipe = Path(tmp) / "no-recipe-pack"
+        write_mini_theme(no_recipe)
+        rmd = (no_recipe / "THEME.md").read_text(encoding="utf-8")
+        (no_recipe / "THEME.md").write_text(rmd.replace("- `tutorial`: hero + h2 + paragraph\n", ""), encoding="utf-8")
+        nr_err, _ = lint_theme.lint_theme(no_recipe, schema)
+        assert_has(nr_err, "tutorial", "缺文章类型配方应失败")
 
         lint_ok = run_cli([sys.executable, str(SCRIPTS / "lint_theme.py"), str(good_dir)])
         assert_true(lint_ok.returncode == 0, f"lint mini 应通过\n{lint_ok.stdout}{lint_ok.stderr}")

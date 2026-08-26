@@ -30,4 +30,4 @@ python3 scripts/lint_theme.py themes
 python3 scripts/validate_article.py --strict scripts/testdata/valid_article.html
 ```
 
-`selftest.py` 必须覆盖：合法正文通过；含 `div`/`class`/无 leaf 的正文失败；`wrap_preview.py` 能生成外壳且复制区不含工具条 markup。
+`selftest.py` 必须覆盖：合法正文通过；含 `div`/`class`/无 leaf 的正文失败；事件属性与 `javascript:` URL 失败；`<pre><code>` 失败；代码文本里的禁用 CSS 不误报；`wrap_preview.py` 能生成外壳且复制区不含工具条 markup；主题包缺 HTML 围栏 / 签名槽 / 配方 / 预览覆盖则 lint 失败。

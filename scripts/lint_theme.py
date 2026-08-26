@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 
 REQUIRED_SLOTS = [
@@ -60,24 +61,58 @@ ARTICLE_TYPES = [
 HTML_FENCE = re.compile(r"```html\s*\n(.*?)```", re.S)
 SLOT_HEADING = re.compile(r"^### slot:([a-z][a-z0-9_]*)\s*$", re.M)
 SIG_HEADING = re.compile(r"^### sig:([a-z][a-z0-9-]*)\s*$", re.M)
+COMPONENT_HEADING = re.compile(r"^### (slot|sig):([a-z][a-z0-9_-]*)\s*$", re.M)
 FONT_SIZE = re.compile(r"font-size\s*:\s*(\d+(?:\.\d+)?)px", re.I)
 FOURSIDE_DASHED = re.compile(r"border\s*:\s*[^;{}]*dashed", re.I)
 CENTERED = re.compile(r"text-align\s*:\s*center", re.I)
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
+CJK = re.compile(r"[一-鿿㐀-䶿]")
+PLACEHOLDER = re.compile(r"\{\{[a-z0-9_]+\}\}", re.I)
+EXEC_SCHEME = re.compile(
+    r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:|"
+    r"^\s*data\s*:\s*(?:text\s*/\s*html|text\s*/\s*javascript|application\s*/\s*(?:javascript|ecmascript))",
+    re.I,
+)
+EXEC_IN_STYLE = re.compile(r"javascript\s*:|expression\s*\(|-moz-binding", re.I)
 
-THEME_HTML_CHECKS = [
-    (re.compile(r"</?div[\s>]", re.I), "ERROR", "出现 <div>，请用 <section>"),
-    (re.compile(r"\sclass\s*=", re.I), "ERROR", "出现 class（交付组件禁止）"),
-    (re.compile(r"\sid\s*=", re.I), "ERROR", "出现 id（THEME.md 组件禁止，预览页可用）"),
-    (re.compile(r"<style[\s>]", re.I), "ERROR", "出现 <style>"),
-    (re.compile(r"<script[\s>]", re.I), "ERROR", "出现 <script>"),
-    (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "ERROR", "禁止 position fixed/absolute/sticky"),
-    (re.compile(r"display\s*:\s*grid", re.I), "ERROR", "禁止 display:grid"),
-    (re.compile(r"var\s*\(\s*--", re.I), "ERROR", "禁止 CSS 变量"),
-    (re.compile(r"@(media|keyframes|import)", re.I), "ERROR", "禁止 @media/@keyframes/@import"),
-    (re.compile(r"white-space\s*:\s*pre", re.I), "ERROR", "禁止 white-space:pre，代码块请逐行 <p>"),
-    (re.compile(r"</?(svg|canvas|video|audio|iframe|form|button|input)\b", re.I), "ERROR", "出现禁止标签"),
+SKIP_TAGS = {"head", "title", "style", "script"}
+VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
+URL_ATTRS = {
+    "href",
+    "src",
+    "xlink:href",
+    "action",
+    "formaction",
+    "poster",
+    "cite",
+    "background",
+    "data",
+    "dynsrc",
+    "lowsrc",
+}
+FORBIDDEN_THEME_TAGS = {
+    "div": "出现 <div>，请用 <section>",
+    "style": "出现 <style>",
+    "script": "出现 <script>",
+    "svg": "出现禁止标签",
+    "canvas": "出现禁止标签",
+    "video": "出现禁止标签",
+    "audio": "出现禁止标签",
+    "iframe": "出现禁止标签",
+    "form": "出现禁止标签",
+    "button": "出现禁止标签",
+    "input": "出现禁止标签",
+    "pre": "禁止 <pre>/<code>，代码块请逐行 <p>",
+    "code": "禁止 <pre>/<code>，代码块请逐行 <p>",
+}
+THEME_STYLE_CHECKS = [
+    (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "禁止 position fixed/absolute/sticky"),
+    (re.compile(r"float\s*:", re.I), "禁止 float"),
+    (re.compile(r"display\s*:\s*grid", re.I), "禁止 display:grid"),
+    (re.compile(r"var\s*\(\s*--", re.I), "禁止 CSS 变量"),
+    (re.compile(r"@(media|keyframes|import)", re.I), "禁止 @media/@keyframes/@import"),
+    (re.compile(r"white-space\s*:\s*pre", re.I), "禁止 white-space:pre，代码块请逐行 <p>"),
 ]
 
 
@@ -179,19 +214,123 @@ def find_theme_dirs(target: Path) -> list[Path]:
     return dirs
 
 
+def is_executable_url(value: str) -> bool:
+    return bool(value) and bool(EXEC_SCHEME.search(value))
+
+
+def _md_section(md_text: str, heading: str) -> str | None:
+    start = md_text.find(heading)
+    if start == -1:
+        return None
+    rest = md_text[start + len(heading) :]
+    nxt = re.search(r"\n## ", rest)
+    if nxt:
+        return md_text[start : start + len(heading) + nxt.start()]
+    return md_text[start:]
+
+
+def iter_component_regions(md_text: str):
+    headings = list(COMPONENT_HEADING.finditer(md_text))
+    for i, match in enumerate(headings):
+        region_start = match.end()
+        region_end = headings[i + 1].start() if i + 1 < len(headings) else len(md_text)
+        h2 = re.search(r"\n## ", md_text[region_start:region_end])
+        if h2:
+            region_end = region_start + h2.start()
+        yield match.group(0).strip(), match.group(1), match.group(2), md_text[region_start:region_end]
+
+
+class ThemeHtmlInspector(HTMLParser):
+    def __init__(self, label: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.label = label
+        self.stack: list[tuple[str, bool]] = []
+        self.leaf_depth = 0
+        self.findings: list[tuple[str, str]] = []
+        self._seen: set[tuple[str, str]] = set()
+        self._has_dashed = False
+        self._has_center = False
+
+    def _add(self, level: str, msg: str) -> None:
+        item = (level, msg)
+        if item in self._seen:
+            return
+        self._seen.add(item)
+        self.findings.append(item)
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self._open(tag, attrs, void=True)
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        self._open(tag, attrs, void=tag in VOID_TAGS)
+
+    def _open(self, tag: str, attrs, *, void: bool) -> None:
+        ltag = tag.lower()
+        ad = {k.lower(): v for k, v in attrs}
+        if ltag in FORBIDDEN_THEME_TAGS:
+            self._add("ERROR", f"{self.label}: {FORBIDDEN_THEME_TAGS[ltag]}")
+        if "class" in ad:
+            self._add("ERROR", f"{self.label}: 出现 class（交付组件禁止）")
+        if "id" in ad:
+            self._add("ERROR", f"{self.label}: 出现 id（THEME.md 组件禁止，预览页可用）")
+        for name, value in attrs:
+            lname = name.lower()
+            if lname.startswith("on") and len(lname) > 2:
+                self._add("ERROR", f"{self.label}: 禁止事件属性 {lname}")
+            if lname in URL_ATTRS and is_executable_url(value or ""):
+                self._add("ERROR", f"{self.label}: 禁止可执行 URL")
+        style = ad.get("style") or ""
+        if style and EXEC_IN_STYLE.search(style):
+            self._add("ERROR", f"{self.label}: style 含可执行内容")
+        for rx, msg in THEME_STYLE_CHECKS:
+            if rx.search(style):
+                self._add("ERROR", f"{self.label}: {msg}")
+        for size in FONT_SIZE.findall(style):
+            if float(size) > 24:
+                self._add("ERROR", f"{self.label}: font-size {size}px 超过 24px")
+        if FOURSIDE_DASHED.search(style):
+            self._has_dashed = True
+        if CENTERED.search(style):
+            self._has_center = True
+        is_leaf = ltag == "span" and "leaf" in ad
+        if is_leaf:
+            self.leaf_depth += 1
+        if not void:
+            self.stack.append((ltag, is_leaf))
+
+    def handle_endtag(self, tag: str) -> None:
+        ltag = tag.lower()
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i][0] == ltag:
+                for _, was_leaf in self.stack[i:]:
+                    if was_leaf:
+                        self.leaf_depth -= 1
+                del self.stack[i:]
+                break
+
+    def handle_data(self, data: str) -> None:
+        if any(t in SKIP_TAGS for t, _ in self.stack):
+            return
+        if self.leaf_depth > 0:
+            return
+        text = data.strip()
+        if not text:
+            return
+        if CJK.search(text) or PLACEHOLDER.search(text):
+            snippet = text[:24] + ("…" if len(text) > 24 else "")
+            self._add("ERROR", f"{self.label}: 占位或中文未包在 span[leaf] 内（{snippet}）")
+
+
 def lint_html_block(html: str, label: str) -> list[tuple[str, str]]:
-    found: list[tuple[str, str]] = []
-    for rx, level, msg in THEME_HTML_CHECKS:
-        if rx.search(html):
-            found.append((level, f"{label}: {msg}"))
-    for size in FONT_SIZE.findall(html):
-        if float(size) > 24:
-            found.append(("ERROR", f"{label}: font-size {size}px 超过 24px"))
-    if FOURSIDE_DASHED.search(html) and not CENTERED.search(html):
-        found.append(("WARN", f"{label}: 四周虚线框，正文强调请改用竖条/标签"))
-    if ("{{" in html or re.search(r"[一-鿿]", html)) and "leaf" not in html:
-        found.append(("ERROR", f"{label}: 有文案或占位但缺少 span leaf"))
-    return found
+    inspector = ThemeHtmlInspector(label)
+    try:
+        inspector.feed(html)
+        inspector.close()
+    except Exception as exc:  # noqa: BLE001
+        return [("WARN", f"{label}: HTML 解析中断: {exc}")]
+    if inspector._has_dashed and not inspector._has_center:
+        inspector._add("WARN", f"{label}: 四周虚线框，正文强调请改用竖条/标签")
+    return inspector.findings
 
 
 def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
@@ -243,9 +382,14 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
     if extra_declared:
         errors.append(f"theme.json slots 含未知必选槽: {', '.join(extra_declared)}")
 
-    sigs = data.get("signature_slots") if isinstance(data.get("signature_slots"), list) else []
-    if sigs and (len(sigs) < 8 or len(sigs) > 16):
-        warnings.append(f"signature_slots 建议 8–16 个，当前 {len(sigs)}")
+    raw_sigs = data.get("signature_slots")
+    if not isinstance(raw_sigs, list):
+        errors.append("theme.json 缺少 signature_slots")
+        sigs: list[str] = []
+    else:
+        sigs = [s for s in raw_sigs if isinstance(s, str)]
+        if len(raw_sigs) < 8 or len(raw_sigs) > 16:
+            errors.append(f"signature_slots 必须 8–16 个，当前 {len(raw_sigs)}")
 
     if not md_path.is_file():
         errors.append("缺少 THEME.md")
@@ -255,9 +399,11 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
         for heading in REQUIRED_MD_HEADINGS:
             if heading not in md_text:
                 errors.append(f"THEME.md 缺少章节 {heading}")
-        for kind in ARTICLE_TYPES:
-            if kind not in md_text:
-                warnings.append(f"THEME.md 配方可能未覆盖文章类型 {kind}")
+        recipe = _md_section(md_text, "## 文章类型配方")
+        if recipe is not None:
+            for kind in ARTICLE_TYPES:
+                if kind not in recipe:
+                    errors.append(f"THEME.md 文章类型配方缺少 {kind}")
 
         slot_ids = SLOT_HEADING.findall(md_text)
         for required in REQUIRED_SLOTS:
@@ -268,19 +414,21 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
             errors.append(f"THEME.md 重复槽: {', '.join(dup)}")
 
         sig_ids = SIG_HEADING.findall(md_text)
-        if len(sig_ids) < 8:
-            warnings.append(f"签名槽少于 8 个（{len(sig_ids)}）")
-        if len(sig_ids) > 16:
-            warnings.append(f"签名槽多于 16 个（{len(sig_ids)}）")
-        if sigs and sorted(sigs) != sorted(sig_ids):
+        if len(sig_ids) < 8 or len(sig_ids) > 16:
+            errors.append(f"THEME.md 签名槽必须 8–16 个，当前 {len(sig_ids)}")
+        if sorted(sigs) != sorted(sig_ids):
             errors.append("theme.json signature_slots 与 THEME.md ### sig:* 不一致")
 
-        for match in HTML_FENCE.finditer(md_text):
-            html = match.group(1)
-            start = md_text.rfind("### ", 0, match.start())
-            label = md_text[start:match.start()].splitlines()[0] if start != -1 else "html"
-            for level, msg in lint_html_block(html, label.strip()):
-                (errors if level == "ERROR" else warnings).append(msg)
+        for label, _kind, _ident, region in iter_component_regions(md_text):
+            fences = list(HTML_FENCE.finditer(region))
+            if not fences:
+                errors.append(f"{label} 缺少 html 代码块")
+                continue
+            if len(fences) > 1:
+                errors.append(f"{label} 应恰好一个 html 代码块，当前 {len(fences)}")
+            for fence in fences:
+                for level, msg in lint_html_block(fence.group(1), label):
+                    (errors if level == "ERROR" else warnings).append(msg)
 
     if not preview_path.is_file():
         errors.append("缺少 preview.html")
@@ -290,7 +438,14 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
             warnings.append("preview.html 不像完整 HTML 文档")
         for slot in REQUIRED_SLOTS:
             if f"slot:{slot}" not in preview and f"preview-slot-{slot}" not in preview:
-                warnings.append(f"preview.html 可能未展示 slot:{slot}")
+                errors.append(f"preview.html 未展示 slot:{slot}")
+        for sig in sigs:
+            if (
+                f"sig:{sig}" not in preview
+                and f"preview-sig-{sig}" not in preview
+                and f"preview-slot-{sig}" not in preview
+            ):
+                errors.append(f"preview.html 未展示 sig:{sig}")
 
     return errors, warnings
 
