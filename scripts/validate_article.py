@@ -76,6 +76,7 @@ URL_ATTRS = {
 
 
 ACTIVE_DATA_TOKEN = re.compile(r"(?:html|svg|xml|javascript|ecmascript)", re.I)
+CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 RAW_UNSAFE = [
     (re.compile(r"<!\[", re.I), "禁止 CDATA / 不完整声明"),
     (re.compile(r"<script\b", re.I), "<script> 会被过滤"),
@@ -90,6 +91,20 @@ def normalize_scheme_text(value: str) -> str:
     return SCHEME_IGNORED.sub("", value or "")
 
 
+def data_uri_media_type(value: str) -> str:
+    """MIME type of a data: URI: after data:, before the first ';' or ','."""
+    text = value.lower()
+    if not text.startswith("data:"):
+        return ""
+    rest = text[5:]
+    cut = len(rest)
+    for sep in ";,":
+        idx = rest.find(sep)
+        if idx != -1:
+            cut = min(cut, idx)
+    return rest[:cut].strip()
+
+
 def is_executable_url(value: str) -> bool:
     if not value:
         return False
@@ -98,8 +113,22 @@ def is_executable_url(value: str) -> bool:
         return True
     lower = text.lower()
     if lower.startswith("data:"):
-        header = lower.split(",", 1)[0]
-        return bool(ACTIVE_DATA_TOKEN.search(header))
+        return bool(ACTIVE_DATA_TOKEN.search(data_uri_media_type(lower)))
+    return False
+
+
+def has_css_declaration(style: str) -> bool:
+    """True when style has at least one property with a non-empty value."""
+    if not style:
+        return False
+    stripped = CSS_COMMENT.sub("", style)
+    for part in stripped.split(";"):
+        piece = part.strip()
+        if ":" not in piece:
+            continue
+        prop, value = piece.split(":", 1)
+        if prop.strip() and value.strip():
+            return True
     return False
 
 
@@ -164,7 +193,7 @@ class ArticleChecker(HTMLParser):
         if len(styles) > 1:
             self.dup_style_count += 1
         effective_style = styles[0] if styles else ""
-        if effective_style.strip():
+        if has_css_declaration(effective_style):
             self.style_count += 1
             if at_root and ltag == "section":
                 self.styled_root = True

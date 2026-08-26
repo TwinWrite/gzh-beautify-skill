@@ -235,6 +235,59 @@ def main() -> int:
         f"首个空 style 应视为无样式: {efs_err}",
     )
 
+    empty_semi = (
+        '<section style=";">'
+        '<p style=";"><span leaf="">正文。</span></p></section>'
+    )
+    esemi_err, _, _ = validate_article.validate(empty_semi)
+    assert_true(
+        any("style" in e.lower() for e in esemi_err),
+        f"style=';' 应视为无声明: {esemi_err}",
+    )
+
+    empty_comment_style = (
+        '<section style="/* empty */">'
+        '<p style="/* empty */"><span leaf="">正文。</span></p></section>'
+    )
+    ecom_err, _, _ = validate_article.validate(empty_comment_style)
+    assert_true(
+        any("style" in e.lower() for e in ecom_err),
+        f"style='/* empty */' 应视为无声明: {ecom_err}",
+    )
+
+    png_named = styled_root(
+        '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
+        '<img src="data:image/png;name=diagram.svg.png;base64,iVBORw0KGgo=">'
+        '<span leaf="">图。</span></p>'
+    )
+    png_err, _, _ = validate_article.validate(png_named)
+    assert_true(
+        not any("可执行" in e for e in png_err),
+        f"png data URI 参数含 svg 不应判为可执行: {png_err}",
+    )
+
+    json_xml_profile = styled_root(
+        '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
+        '<a href="data:application/json;profile=https://example/xml,{}">'
+        '<span leaf="">链。</span></a></p>'
+    )
+    json_err, _, _ = validate_article.validate(json_xml_profile)
+    assert_true(
+        not any("可执行" in e for e in json_err),
+        f"json data URI 参数含 xml 不应判为可执行: {json_err}",
+    )
+
+    svg_img = styled_root(
+        '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
+        '<img src="data:image/svg+xml;utf8,<svg></svg>">'
+        '<span leaf="">图。</span></p>'
+    )
+    svg_img_err, _, _ = validate_article.validate(svg_img)
+    assert_true(
+        any("可执行" in e for e in svg_img_err),
+        f"image/svg+xml data URI 仍应失败: {svg_img_err}",
+    )
+
     svg_object = styled_root(
         f"{body_p('正文。')}<object data=\"data:image/svg+xml,<svg onload=alert(1)>\"></object>"
     )
@@ -395,6 +448,26 @@ def main() -> int:
         (prefix_preview / "preview.html").write_text(pp.replace("sig:sig-demo-1", "sig:sig-demo-10"), encoding="utf-8")
         pp_err, _ = lint_theme.lint_theme(prefix_preview, schema)
         assert_true(any("sig:sig-demo-1" in e for e in pp_err), f"预览前缀命中不应放过缺槽: {pp_err}")
+
+        comment_preview = Path(tmp) / "comment-preview-pack"
+        write_mini_theme(comment_preview)
+        cp = (comment_preview / "preview.html").read_text(encoding="utf-8")
+        (comment_preview / "preview.html").write_text(
+            cp.replace("<p>slot:footer</p>", "<!-- slot:footer -->"),
+            encoding="utf-8",
+        )
+        cp_err, _ = lint_theme.lint_theme(comment_preview, schema)
+        assert_has(cp_err, "slot:footer", "注释里的预览标记不算覆盖")
+
+        script_preview = Path(tmp) / "script-preview-pack"
+        write_mini_theme(script_preview)
+        sp = (script_preview / "preview.html").read_text(encoding="utf-8")
+        (script_preview / "preview.html").write_text(
+            sp.replace("<p>slot:footer</p>", "<script>var x='slot:footer'</script>"),
+            encoding="utf-8",
+        )
+        sp_err, _ = lint_theme.lint_theme(script_preview, schema)
+        assert_has(sp_err, "slot:footer", "script 字符串里的预览标记不算覆盖")
 
         dup_sig = Path(tmp) / "dup-sig-pack"
         write_mini_theme(dup_sig)

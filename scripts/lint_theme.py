@@ -226,6 +226,25 @@ def find_theme_dirs(target: Path) -> list[Path]:
     return dirs
 
 
+ACTIVE_DATA_TOKEN = re.compile(r"(?:html|svg|xml|javascript|ecmascript)", re.I)
+PREVIEW_SKIP_TAGS = {"head", "title", "style", "script", "noscript"}
+PREVIEW_MARKER_ATTRS = {"id", "class", "name"}
+
+
+def data_uri_media_type(value: str) -> str:
+    """MIME type of a data: URI: after data:, before the first ';' or ','."""
+    text = value.lower()
+    if not text.startswith("data:"):
+        return ""
+    rest = text[5:]
+    cut = len(rest)
+    for sep in ";,":
+        idx = rest.find(sep)
+        if idx != -1:
+            cut = min(cut, idx)
+    return rest[:cut].strip()
+
+
 def is_executable_url(value: str) -> bool:
     if not value:
         return False
@@ -234,8 +253,7 @@ def is_executable_url(value: str) -> bool:
         return True
     lower = text.lower()
     if lower.startswith("data:"):
-        header = lower.split(",", 1)[0]
-        return bool(re.search(r"(?:html|svg|xml|javascript|ecmascript)", header, re.I))
+        return bool(ACTIVE_DATA_TOKEN.search(data_uri_media_type(lower)))
     return False
 
 
@@ -263,18 +281,80 @@ def recipe_entry_ids(section: str) -> set[str]:
     return found
 
 
-def has_preview_marker(preview: str, ident: str, *prefixes: str) -> bool:
+def has_preview_marker(haystack: str, ident: str, *prefixes: str) -> bool:
     for prefix in prefixes:
         needle = f"{prefix}{ident}"
         start = 0
         while True:
-            idx = preview.find(needle, start)
+            idx = haystack.find(needle, start)
             if idx == -1:
                 break
             end = idx + len(needle)
-            if end == len(preview) or not PREVIEW_ID_TAIL.match(preview[end]):
+            if end == len(haystack) or not PREVIEW_ID_TAIL.match(haystack[end]):
                 return True
             start = idx + 1
+    return False
+
+
+class PreviewMarkerCollector(HTMLParser):
+    """Collect visible text and intended attributes; skip comments/script/style."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: list[str] = []
+        self.chunks: list[str] = []
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self._open(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        self._open(tag, attrs)
+
+    def _open(self, tag: str, attrs) -> None:
+        ltag = tag.lower()
+        self.stack.append(ltag)
+        if any(t in PREVIEW_SKIP_TAGS for t in self.stack):
+            return
+        for name, value in attrs:
+            if not value:
+                continue
+            lname = name.lower()
+            if lname in PREVIEW_MARKER_ATTRS or lname.startswith("data-"):
+                self.chunks.append(value)
+
+    def handle_endtag(self, tag: str) -> None:
+        ltag = tag.lower()
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i] == ltag:
+                del self.stack[i:]
+                break
+
+    def handle_data(self, data: str) -> None:
+        if any(t in PREVIEW_SKIP_TAGS for t in self.stack):
+            return
+        text = data.strip()
+        if text:
+            self.chunks.append(text)
+
+    def handle_comment(self, _data: str) -> None:
+        return
+
+
+def collect_preview_marker_text(preview: str) -> list[str]:
+    collector = PreviewMarkerCollector()
+    try:
+        collector.feed(preview)
+        collector.close()
+    except Exception:  # noqa: BLE001
+        return []
+    return collector.chunks
+
+
+def preview_shows_marker(preview: str, ident: str, *prefixes: str) -> bool:
+    for chunk in collect_preview_marker_text(preview):
+        if has_preview_marker(chunk, ident, *prefixes):
+            return True
     return False
 
 
@@ -523,10 +603,10 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
         if "<html" not in preview.lower():
             warnings.append("preview.html 不像完整 HTML 文档")
         for slot in REQUIRED_SLOTS:
-            if not has_preview_marker(preview, slot, "slot:", "preview-slot-"):
+            if not preview_shows_marker(preview, slot, "slot:", "preview-slot-"):
                 errors.append(f"preview.html 未展示 slot:{slot}")
         for sig in unique_sigs:
-            if not has_preview_marker(preview, sig, "sig:", "preview-sig-", "preview-slot-"):
+            if not preview_shows_marker(preview, sig, "sig:", "preview-sig-", "preview-slot-"):
                 errors.append(f"preview.html 未展示 sig:{sig}")
 
     return errors, warnings
