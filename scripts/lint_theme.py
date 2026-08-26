@@ -68,7 +68,7 @@ CENTERED = re.compile(r"text-align\s*:\s*center", re.I)
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
 CJK = re.compile(r"[一-鿿㐀-䶿]")
-PLACEHOLDER = re.compile(r"\{\{[a-z0-9_]+\}\}", re.I)
+PLACEHOLDER = re.compile(r"\{\{[a-z0-9_-]+\}\}", re.I)
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
 PREVIEW_ID_TAIL = re.compile(r"[a-z0-9_-]")
 RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+\.)\s+`?([a-z][a-z0-9_-]*)`?", re.I)
@@ -124,7 +124,52 @@ FORBIDDEN_THEME_TAGS = {
     "pre": "禁止 <pre>/<code>，代码块请逐行 <p>",
     "code": "禁止 <pre>/<code>，代码块请逐行 <p>",
     "meta": "出现禁止标签",
+    "base": "出现禁止标签",
+    "plaintext": "出现禁止标签",
+    "xmp": "出现禁止标签",
 }
+THEME_NEED_STYLE = {
+    "section",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "ul",
+    "ol",
+    "li",
+    "table",
+    "tr",
+    "td",
+    "th",
+    "figure",
+    "figcaption",
+    "img",
+    "blockquote",
+    "hr",
+}
+IMPLIED_END_ON_START = {
+    "li": frozenset({"li"}),
+    "dt": frozenset({"dt", "dd"}),
+    "dd": frozenset({"dt", "dd"}),
+    "td": frozenset({"td", "th"}),
+    "th": frozenset({"td", "th"}),
+    "tr": frozenset({"tr"}),
+    "p": frozenset({"p"}),
+}
+IMPLIED_END_STOP = frozenset({
+    "ul",
+    "ol",
+    "dl",
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "section",
+    "figure",
+    "blockquote",
+    "html",
+    "body",
+})
 THEME_STYLE_CHECKS = [
     (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "禁止 position fixed/absolute/sticky"),
     (re.compile(r"float\s*:", re.I), "禁止 float"),
@@ -281,8 +326,10 @@ PREVIEW_BLOCK_BREAK = {
     "dt",
     "dd",
 }
-FENCE_OPEN = re.compile(r"^ {0,3}([`~]{3,})(.*)$")
-FENCE_CLOSE = re.compile(r"^ {0,3}([`~]{3,})\s*$")
+FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*$")
+HTML_TYPE1_OPEN = re.compile(r"(?i)^ {0,3}<(script|pre|style|textarea)(?:\s|/?>|$)")
+HTML_TYPE1_CLOSE = re.compile(r"(?i)</(script|pre|style|textarea)\s*>")
 
 
 def data_uri_media_type(value: str) -> str:
@@ -370,6 +417,12 @@ def iter_css_declarations(style: str):
             yield prop, value
 
 
+def has_css_declaration(style: str) -> bool:
+    for _ in iter_css_declarations(style):
+        return True
+    return False
+
+
 def inline_style_hides(style: str) -> bool:
     for prop, value in iter_css_declarations(style):
         token = value.split("!", 1)[0].strip().split()[0].lower() if value else ""
@@ -394,8 +447,7 @@ class VisibleMarkdownCollector(HTMLParser):
         self.parts: list[str] = []
 
     def handle_startendtag(self, tag: str, attrs) -> None:
-        if is_real_html_tag(tag) and tag.lower() not in VOID_TAGS:
-            self.depth += 1
+        return
 
     def handle_starttag(self, tag: str, attrs) -> None:
         if is_real_html_tag(tag) and tag.lower() not in VOID_TAGS:
@@ -467,6 +519,8 @@ class PreviewMarkerCollector(HTMLParser):
         ltag = tag.lower()
         hidden = any(name.lower() == "hidden" for name, _ in attrs)
         hidden = hidden or any(inline_style_hides(value or "") for name, value in attrs if name.lower() == "style")
+        if ltag == "input" and any(value.lower() == "hidden" for value in attr_values(attrs, "type")):
+            hidden = True
         skip = self.skip_depth > 0 or ltag in PREVIEW_SKIP_TAGS or hidden
         if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
             self._flush_text()
@@ -525,6 +579,7 @@ def iter_top_level_fences(text: str):
     pos = 0
     opener: tuple[int, str, str] | None = None
     html_block = False
+    type1: str | None = None
     for line in lines:
         raw = line.rstrip("\r\n")
         if opener is not None:
@@ -535,9 +590,23 @@ def iter_top_level_fences(text: str):
                 opener = None
             pos += len(line)
             continue
+        if type1:
+            close_t1 = HTML_TYPE1_CLOSE.search(raw)
+            if close_t1 and close_t1.group(1).lower() == type1:
+                type1 = None
+            pos += len(line)
+            continue
         if html_block:
             if not raw.strip():
                 html_block = False
+            pos += len(line)
+            continue
+        type1_open = HTML_TYPE1_OPEN.match(raw)
+        if type1_open:
+            type1 = type1_open.group(1).lower()
+            close_t1 = HTML_TYPE1_CLOSE.search(raw)
+            if close_t1 and close_t1.group(1).lower() == type1:
+                type1 = None
             pos += len(line)
             continue
         if HTML_BLOCK_OPEN.match(raw):
@@ -656,8 +725,21 @@ class ThemeHtmlInspector(HTMLParser):
     def handle_starttag(self, tag: str, attrs) -> None:
         self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
 
+    def _implied_close(self, incoming: str) -> None:
+        targets = IMPLIED_END_ON_START.get(incoming)
+        if not targets:
+            return
+        while self.stack:
+            top = self.stack[-1][0]
+            if top in IMPLIED_END_STOP:
+                return
+            self.handle_endtag(top)
+            if top in targets:
+                return
+
     def _open(self, tag: str, attrs, *, void: bool) -> None:
         ltag = tag.lower()
+        self._implied_close(ltag)
         ad = {k.lower(): v for k, v in attrs}
         if ltag in FORBIDDEN_THEME_TAGS:
             self._add("ERROR", f"{self.label}: {FORBIDDEN_THEME_TAGS[ltag]}")
@@ -668,6 +750,9 @@ class ThemeHtmlInspector(HTMLParser):
         styles = attr_values(attrs, "style")
         if len(styles) > 1:
             self._add("ERROR", f"{self.label}: 禁止重复 style 属性")
+        effective_style = styles[0] if styles else ""
+        if ltag in THEME_NEED_STYLE and not has_css_declaration(effective_style):
+            self._add("ERROR", f"{self.label}: <{ltag}> 缺少 style")
         for name, value in attrs:
             lname = name.lower()
             if lname.startswith("on") and len(lname) > 2:
@@ -727,6 +812,9 @@ THEME_RAW_UNSAFE = [
     (re.compile(r"<object\b", re.I), "出现禁止标签"),
     (re.compile(r"<embed\b", re.I), "出现禁止标签"),
     (re.compile(r"<meta\b", re.I), "出现禁止标签"),
+    (re.compile(r"<base\b", re.I), "出现禁止标签"),
+    (re.compile(r"<plaintext\b", re.I), "出现禁止标签"),
+    (re.compile(r"<xmp\b", re.I), "出现禁止标签"),
     (re.compile(r"</div\b", re.I), "出现 <div>，请用 <section>"),
 ]
 

@@ -372,6 +372,28 @@ def main() -> int:
         f"无 style 的 li 应失败: {uli_err}",
     )
 
+    implied_li = styled_root(
+        '<ul style="margin:0 0 16px;padding-left:1.4em;">'
+        '<li style="margin:0;font-size:16px;"><span leaf="">一。'
+        '<li style="margin:0;font-size:16px;">二。</li></ul>'
+    )
+    ili_err, _, _ = validate_article.validate(implied_li)
+    assert_true(
+        any("包裹" in e or "leaf" in e.lower() for e in ili_err),
+        f"省略 </li> 时后一项中文不应算已包裹: {ili_err}",
+    )
+
+    base_tag = styled_root(f'{body_p("正文。")}<base href="https://attacker.example/">')
+    base_err, _, _ = validate_article.validate(base_tag)
+    assert_true(any("base" in e.lower() for e in base_err), f"<base> 应失败: {base_err}")
+
+    plaintext_tag = styled_root(f"{body_p('正文。')}<plaintext>")
+    pt_err, _, _ = validate_article.validate(plaintext_tag)
+    assert_true(
+        any("plaintext" in e.lower() or "预览" in e for e in pt_err),
+        f"<plaintext> 应失败: {pt_err}",
+    )
+
     with tempfile.TemporaryDirectory() as tmp:
         preview_out = Path(tmp) / "out.html"
         wrap_preview.wrap(SCRIPTS / "testdata" / "valid_article.html", preview_out)
@@ -584,6 +606,16 @@ def main() -> int:
         vhp2_err, _ = lint_theme.lint_theme(void_hidden_preview, schema)
         assert_true(not vhp2_err, f"hidden 的 void 标签不应把后续可见标记吃掉: {vhp2_err}")
 
+        hidden_input_preview = Path(tmp) / "hidden-input-preview-pack"
+        write_mini_theme(hidden_input_preview)
+        hip = (hidden_input_preview / "preview.html").read_text(encoding="utf-8")
+        (hidden_input_preview / "preview.html").write_text(
+            hip.replace("<p>slot:footer</p>", '<input type="hidden" name="slot:footer">'),
+            encoding="utf-8",
+        )
+        hip_err, _ = lint_theme.lint_theme(hidden_input_preview, schema)
+        assert_has(hip_err, "slot:footer", "hidden input 的 name 不算预览覆盖")
+
         split_preview = Path(tmp) / "split-preview-pack"
         write_mini_theme(split_preview)
         slp = (split_preview / "preview.html").read_text(encoding="utf-8")
@@ -681,6 +713,73 @@ def main() -> int:
         (autolink_md / "THEME.md").write_text(f"<https://example.com>\n\n{raw_auto}", encoding="utf-8")
         auto_err, _ = lint_theme.lint_theme(autolink_md, schema)
         assert_true(not auto_err, f"Markdown 自动链接不应吞掉后续结构: {auto_err}")
+
+        selfclose_md = Path(tmp) / "selfclose-md-pack"
+        write_mini_theme(selfclose_md)
+        raw_sc = (selfclose_md / "THEME.md").read_text(encoding="utf-8")
+        (selfclose_md / "THEME.md").write_text(f"<span/>\n\n{raw_sc}", encoding="utf-8")
+        sc_md_err, _ = lint_theme.lint_theme(selfclose_md, schema)
+        assert_true(not sc_md_err, f"自闭合 <span/> 不应吞掉后续结构: {sc_md_err}")
+
+        mixed_fence = Path(tmp) / "mixed-fence-pack"
+        write_mini_theme(mixed_fence)
+        mf = (mixed_fence / "THEME.md").read_text(encoding="utf-8")
+        mf = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n```~html\n<p style=\"font-size:16px;\"><span leaf=\"\">页脚</span></p>\n```~\n",
+            mf,
+            count=1,
+            flags=re.S,
+        )
+        (mixed_fence / "THEME.md").write_text(mf, encoding="utf-8")
+        mf_err, _ = lint_theme.lint_theme(mixed_fence, schema)
+        assert_true(
+            any("slot:footer" in e and "html" in e for e in mf_err),
+            f"混合字符围栏不应算作 html 实现: {mf_err}",
+        )
+
+        type1_fence = Path(tmp) / "type1-fence-pack"
+        write_mini_theme(type1_fence)
+        t1 = (type1_fence / "THEME.md").read_text(encoding="utf-8")
+        t1 = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n<script>\n```html\n<p style=\"font-size:16px;\"><span leaf=\"\">页脚</span></p>\n```\n</script>\n",
+            t1,
+            count=1,
+            flags=re.S,
+        )
+        (type1_fence / "THEME.md").write_text(t1, encoding="utf-8")
+        t1_err, _ = lint_theme.lint_theme(type1_fence, schema)
+        assert_true(
+            any("slot:footer" in e and "html" in e for e in t1_err),
+            f"script/pre 等 type-1 HTML 块里的围栏不应算实现: {t1_err}",
+        )
+
+        unstyled_comp = Path(tmp) / "unstyled-comp-pack"
+        write_mini_theme(unstyled_comp)
+        uc = (unstyled_comp / "THEME.md").read_text(encoding="utf-8")
+        uc = re.sub(
+            r"### slot:footer\n\n```html\n.*?```\n",
+            "### slot:footer\n\n```html\n<p><span leaf=\"\">{{footer}}</span></p>\n```\n",
+            uc,
+            count=1,
+            flags=re.S,
+        )
+        (unstyled_comp / "THEME.md").write_text(uc, encoding="utf-8")
+        uc_err, _ = lint_theme.lint_theme(unstyled_comp, schema)
+        assert_true(
+            any("style" in e.lower() and "footer" in e for e in uc_err),
+            f"组件缺少 inline style 应失败: {uc_err}",
+        )
+
+        hyphen_ph = lint_theme.lint_html_block(
+            '<p style="margin:0">{{author-name}}</p>',
+            "### sig:author-name",
+        )
+        assert_true(
+            any("占位" in msg or "author-name" in msg for _, msg in hyphen_ph),
+            f"带连字符的占位符未包 leaf 应失败: {hyphen_ph}",
+        )
 
         dup_sig = Path(tmp) / "dup-sig-pack"
         write_mini_theme(dup_sig)

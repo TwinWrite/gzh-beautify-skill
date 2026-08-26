@@ -19,7 +19,7 @@ URL_OR_EMAIL = re.compile(
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
 CODE_STYLE = re.compile(r"monospace|courier|consolas|sf mono", re.I)
 FONT_SIZE = re.compile(r"font-size\s*:\s*(\d+(?:\.\d+)?)px", re.I)
-PLACEHOLDER = re.compile(r"\{\{[a-z0-9_]+\}\}", re.I)
+PLACEHOLDER = re.compile(r"\{\{[a-z0-9_-]+\}\}", re.I)
 EXEC_SCHEME = re.compile(
     r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:|"
     r"^\s*data\s*:\s*(?:text\s*/\s*html|text\s*/\s*javascript|application\s*/\s*(?:javascript|ecmascript))",
@@ -48,6 +48,9 @@ FORBIDDEN_TAGS = {
     "pre": "禁止 <pre>/<code>，代码块须逐行 <p>",
     "code": "禁止 <pre>/<code>，代码块须逐行 <p>",
     "meta": "禁止 <meta>，正文须为可粘贴片段",
+    "base": "禁止 <base>，会改写相对链接",
+    "plaintext": "禁止 <plaintext>，会破坏预览解析",
+    "xmp": "禁止 <xmp>，会破坏预览解析",
 }
 STYLE_FORBIDDEN = [
     (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "position fixed/absolute/sticky 不支持"),
@@ -60,6 +63,29 @@ STYLE_FORBIDDEN = [
     (re.compile(r"white-space\s*:\s*pre", re.I), "white-space:pre 会造成大段空白"),
     (re.compile(r"url\s*\(\s*['\"]?https?://[^)]*\.(woff2?|ttf|otf|eot)", re.I), "外链字体不支持"),
 ]
+IMPLIED_END_ON_START = {
+    "li": frozenset({"li"}),
+    "dt": frozenset({"dt", "dd"}),
+    "dd": frozenset({"dt", "dd"}),
+    "td": frozenset({"td", "th"}),
+    "th": frozenset({"td", "th"}),
+    "tr": frozenset({"tr"}),
+    "p": frozenset({"p"}),
+}
+IMPLIED_END_STOP = frozenset({
+    "ul",
+    "ol",
+    "dl",
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "section",
+    "figure",
+    "blockquote",
+    "html",
+    "body",
+})
 BLOCK_NEED_STYLE = {
     "section",
     "p",
@@ -103,6 +129,9 @@ RAW_UNSAFE = [
     (re.compile(r"<embed\b", re.I), "出现禁止标签"),
     (re.compile(r"<iframe\b", re.I), "出现禁止标签"),
     (re.compile(r"<meta\b", re.I), "禁止 <meta>，正文须为可粘贴片段"),
+    (re.compile(r"<base\b", re.I), "禁止 <base>，会改写相对链接"),
+    (re.compile(r"<plaintext\b", re.I), "禁止 <plaintext>，会破坏预览解析"),
+    (re.compile(r"<xmp\b", re.I), "禁止 <xmp>，会破坏预览解析"),
     (re.compile(r"</div\b", re.I), "<div> 会被改写，请用 <section>"),
 ]
 
@@ -198,8 +227,21 @@ class ArticleChecker(HTMLParser):
     def handle_starttag(self, tag: str, attrs) -> None:
         self._open(tag, attrs, void=tag.lower() in VOID_TAGS)
 
+    def _implied_close(self, incoming: str) -> None:
+        targets = IMPLIED_END_ON_START.get(incoming)
+        if not targets:
+            return
+        while self.stack:
+            top = self.stack[-1][0]
+            if top in IMPLIED_END_STOP:
+                return
+            self.handle_endtag(top)
+            if top in targets:
+                return
+
     def _open(self, tag: str, attrs, *, void: bool) -> None:
         ltag = tag.lower()
+        self._implied_close(ltag)
         ad = {k.lower(): v for k, v in attrs}
         styles = attr_values(attrs, "style")
         at_root = not self.stack
