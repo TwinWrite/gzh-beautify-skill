@@ -352,6 +352,26 @@ def main() -> int:
         f"后续 margin 简写应覆盖水平 auto: {mor_err}",
     )
 
+    all_reset_root = (
+        '<section style="max-width:677px;margin:0 auto;all:initial;">'
+        f"{body_p('正文。')}</section>"
+    )
+    arr_err, _, _ = validate_article.validate(all_reset_root)
+    assert_true(
+        any("677" in e or "根 section" in e for e in arr_err),
+        f"all:initial 应重置根布局: {arr_err}",
+    )
+
+    font_shorthand_size = styled_root(
+        '<p style="font-size:16px;font:100px Arial;margin:0 0 16px;color:#1F2937;">'
+        '<span leaf="">正文。</span></p>'
+    )
+    fss_err, _, _ = validate_article.validate(font_shorthand_size)
+    assert_true(
+        any("font-size" in e and "24" in e for e in fss_err),
+        f"font:100px 简写应超过 24px: {fss_err}",
+    )
+
     bogus_only_style = styled_root(
         '<p style="made-up:bogus"><span leaf="">正文。</span></p>'
     )
@@ -891,6 +911,27 @@ def main() -> int:
         (exclude_only_recipe / "THEME.md").write_text(eor, encoding="utf-8")
         eor_err, _ = lint_theme.lint_theme(exclude_only_recipe, schema)
         assert_has(eor_err, "tutorial", "排除动词后的 token 不算正选配方")
+
+        coord_exclude_recipe = Path(tmp) / "coord-exclude-recipe-pack"
+        write_mini_theme(coord_exclude_recipe)
+        cer = (coord_exclude_recipe / "THEME.md").read_text(encoding="utf-8")
+        for kind in lint_theme.ARTICLE_TYPES:
+            cer = cer.replace(
+                f"- `{kind}`: {MINI_RECIPE}\n",
+                f"- `{kind}`: hero；不要用 footer 和 sig-demo-1\n",
+            )
+        (coord_exclude_recipe / "THEME.md").write_text(cer, encoding="utf-8")
+        cer_err, _ = lint_theme.lint_theme(coord_exclude_recipe, schema)
+        assert_has(cer_err, "tutorial", "排除短语里的签名槽不应算正选")
+
+        hyphen_sig_ids = {"author-name", "sig-demo-2"}
+        assert_true(
+            lint_theme.recipe_body_usable(
+                "hero + h2 + paragraph；可用签名槽 sig:author-name；不要用 image_gif",
+                sig_ids=hyphen_sig_ids,
+            ),
+            "sig:author-name 应对齐已声明的 author-name",
+        )
 
         indented_recipe = Path(tmp) / "indented-recipe-pack"
         write_mini_theme(indented_recipe)
@@ -1649,6 +1690,51 @@ def main() -> int:
         (nth_last_sheet / "preview.html").write_text(nls, encoding="utf-8")
         nls_err, _ = lint_theme.lint_theme(nth_last_sheet, schema)
         assert_has(nls_err, "slot:footer", ":nth-last-child(1) 隐藏的页脚不应算覆盖")
+
+        calc_opacity_sheet = Path(tmp) / "calc-opacity-pack"
+        write_mini_theme(calc_opacity_sheet)
+        cos = (calc_opacity_sheet / "preview.html").read_text(encoding="utf-8")
+        cos = cos.replace(
+            "</head>",
+            "<style>#footer{opacity:calc(0)}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (calc_opacity_sheet / "preview.html").write_text(cos, encoding="utf-8")
+        cos_err, _ = lint_theme.lint_theme(calc_opacity_sheet, schema)
+        assert_has(cos_err, "slot:footer", "opacity:calc(0) 隐藏的页脚不应算覆盖")
+
+        any_link_sheet = Path(tmp) / "any-link-pack"
+        write_mini_theme(any_link_sheet)
+        als = (any_link_sheet / "preview.html").read_text(encoding="utf-8")
+        als = als.replace(
+            "</head>",
+            "<style>a:any-link{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<a href="https://example.test" id="footer">slot:footer</a>',
+        )
+        (any_link_sheet / "preview.html").write_text(als, encoding="utf-8")
+        als_err, _ = lint_theme.lint_theme(any_link_sheet, schema)
+        assert_has(als_err, "slot:footer", "a:any-link 隐藏的页脚不应算覆盖")
+
+        plain_style_sheet = Path(tmp) / "plain-style-pack"
+        write_mini_theme(plain_style_sheet)
+        pss = (plain_style_sheet / "preview.html").read_text(encoding="utf-8")
+        pss = pss.replace(
+            "</head>",
+            '<style type="text/plain">#footer{display:none}</style></head>',
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (plain_style_sheet / "preview.html").write_text(pss, encoding="utf-8")
+        pss_err, _ = lint_theme.lint_theme(plain_style_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in pss_err),
+            f"type=text/plain 的 style 不应应用 CSS: {pss_err}",
+        )
 
         bogus_display_sheet = Path(tmp) / "bogus-display-sheet-pack"
         write_mini_theme(bogus_display_sheet)
@@ -2531,6 +2617,49 @@ def main() -> int:
             f"slot:root 仅有 color 应失败: {crm_err}",
         )
 
+        all_root_theme = Path(tmp) / "all-root-theme-pack"
+        write_mini_theme(all_root_theme)
+        arm = (all_root_theme / "THEME.md").read_text(encoding="utf-8")
+        arm = arm.replace(
+            'style="max-width:677px;margin:0 auto;background:#FFFFFF;color:#1F2937;"',
+            'style="max-width:677px;margin:0 auto;all:initial;"',
+            1,
+        )
+        (all_root_theme / "THEME.md").write_text(arm, encoding="utf-8")
+        arm_err, _ = lint_theme.lint_theme(all_root_theme, schema)
+        assert_true(
+            any("slot:root" in e and ("677" in e or "margin" in e) for e in arm_err),
+            f"slot:root 被 all:initial 重置应失败: {arm_err}",
+        )
+
+        title_comp = lint_theme.lint_html_block(
+            "<title>{{body}}</title>",
+            "### slot:footer",
+        )
+        assert_true(
+            any("title" in msg.lower() for _, msg in title_comp),
+            f"组件仅有 title 应失败: {title_comp}",
+        )
+
+        root_oops_theme = Path(tmp) / "root-oops-theme-pack"
+        write_mini_theme(root_oops_theme)
+        rot = (root_oops_theme / "THEME.md").read_text(encoding="utf-8")
+        rot = rot.replace(
+            '<section style="max-width:677px;margin:0 auto;background:#FFFFFF;color:#1F2937;">\n'
+            "  <!-- children -->\n"
+            "</section>",
+            '<section style="max-width:677px;margin:0 auto;background:#FFFFFF;color:#1F2937;">\n'
+            "  <!-- children -->\n"
+            "</section>oops",
+            1,
+        )
+        (root_oops_theme / "THEME.md").write_text(rot, encoding="utf-8")
+        rot_err, _ = lint_theme.lint_theme(root_oops_theme, schema)
+        assert_true(
+            any("slot:root" in e for e in rot_err),
+            f"根 section 旁裸文本应失败: {rot_err}",
+        )
+
         root_span_theme = Path(tmp) / "root-span-theme-pack"
         write_mini_theme(root_span_theme)
         rsm = (root_span_theme / "THEME.md").read_text(encoding="utf-8")
@@ -2575,6 +2704,21 @@ def main() -> int:
         assert_true(
             any("font-size" in e and "24" in e for e in ptm_err),
             f"主题 font-size:100pt 应超过 24px: {ptm_err}",
+        )
+
+        font_shorthand_theme = Path(tmp) / "font-shorthand-theme-pack"
+        write_mini_theme(font_shorthand_theme)
+        fsm = (font_shorthand_theme / "THEME.md").read_text(encoding="utf-8")
+        fsm = fsm.replace(
+            'style="margin:0 0 12px;font-size:16px;color:#1F2937;"',
+            'style="margin:0 0 12px;font-size:16px;font:100px Arial;color:#1F2937;"',
+            1,
+        )
+        (font_shorthand_theme / "THEME.md").write_text(fsm, encoding="utf-8")
+        fsm_err, _ = lint_theme.lint_theme(font_shorthand_theme, schema)
+        assert_true(
+            any("font-size" in e and "24" in e for e in fsm_err),
+            f"主题 font:100px 简写应超过 24px: {fsm_err}",
         )
 
         lint_ok = run_cli([sys.executable, str(SCRIPTS / "lint_theme.py"), str(good_dir)])

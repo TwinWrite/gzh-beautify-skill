@@ -482,6 +482,21 @@ def iter_css_declarations(style: str):
             yield prop, value
 
 
+def css_numeric_opacity(token: str) -> float | None:
+    text = (token or "").strip().lower()
+    if text.startswith("calc(") and text.endswith(")"):
+        return css_numeric_opacity(text[5:-1])
+    if text.endswith("%"):
+        try:
+            return float(text[:-1]) / 100.0
+        except ValueError:
+            return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def css_decl_value_applies(prop: str, token: str) -> bool:
     if not token:
         return False
@@ -490,12 +505,10 @@ def css_decl_value_applies(prop: str, token: str) -> bool:
     if prop == "visibility":
         return token in _CSS_VIS_OK
     if prop == "opacity":
-        raw = token[:-1] if token.endswith("%") else token
-        try:
-            float(raw)
+        if css_numeric_opacity(token) is not None:
             return True
-        except ValueError:
-            return False
+        low = token.lower()
+        return low.startswith("calc(") and low.endswith(")")
     return True
 
 
@@ -520,16 +533,62 @@ def has_css_declaration(style: str) -> bool:
     return False
 
 
+def _cascade_put(winning: dict, key: str, value, important: bool) -> None:
+    prev = winning.get(key)
+    if prev is not None and prev[1] and not important:
+        return
+    winning[key] = (value, important)
+
+
+def _apply_all_reset(winning: dict, important: bool, keyword: str = "initial") -> None:
+    for key in list(winning):
+        if key in {"unicode-bidi", "direction"}:
+            continue
+        _cascade_put(winning, key, keyword, important)
+
+
+_FONT_PREFIX = frozenset({
+    "normal", "italic", "oblique", "bold", "bolder", "lighter", "small-caps",
+    "ultra-condensed", "extra-condensed", "condensed", "semi-condensed",
+    "semi-expanded", "expanded", "extra-expanded", "ultra-expanded",
+})
+_FONT_SYSTEM = frozenset({
+    "caption", "icon", "menu", "message-box", "small-caption", "status-bar",
+})
+
+
+def font_shorthand_size(value: str) -> str | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    low = text.lower()
+    if low in _FONT_SYSTEM:
+        return low
+    for tok in text.split():
+        piece = tok.split("/", 1)[0]
+        pl = piece.lower()
+        if pl in _FONT_PREFIX or re.fullmatch(r"[1-9]00", pl):
+            continue
+        return piece
+    return None
+
+
 def winning_style_raw(style: str) -> dict[str, str]:
     """Winning CSS declarations: prop -> full value (without !important)."""
     winning: dict[str, tuple[str, bool]] = {}
     for prop, value in iter_css_declarations(style):
         important = bool(CSS_IMPORTANT.search(value))
         raw = CSS_IMPORTANT.sub("", value).strip().lower()
-        prev = winning.get(prop)
-        if prev is not None and prev[1] and not important:
+        token = raw.split()[0] if raw else ""
+        if prop == "all":
+            _apply_all_reset(winning, important, token or "initial")
             continue
-        winning[prop] = (raw, important)
+        if prop == "font":
+            size = font_shorthand_size(raw)
+            if size:
+                _cascade_put(winning, "font-size", size, important)
+            continue
+        _cascade_put(winning, prop, raw, important)
     return {prop: raw for prop, (raw, _imp) in winning.items()}
 
 
@@ -550,21 +609,18 @@ def winning_margin_sides(style: str) -> dict[str, str]:
     for prop, value in iter_css_declarations(style):
         important = bool(CSS_IMPORTANT.search(value))
         raw = CSS_IMPORTANT.sub("", value).strip().lower()
+        if prop == "all":
+            _apply_all_reset(winning, important, raw.split()[0] if raw else "initial")
+            continue
         if prop == "margin":
             expanded = _expand_box_sides(raw.split())
             if not expanded:
                 continue
             for side, val in zip(("top", "right", "bottom", "left"), expanded):
-                prev = winning.get(side)
-                if prev is not None and prev[1] and not important:
-                    continue
-                winning[side] = (val, important)
+                _cascade_put(winning, side, val, important)
         elif prop in {"margin-top", "margin-right", "margin-bottom", "margin-left"}:
             side = prop.split("-", 1)[1]
-            prev = winning.get(side)
-            if prev is not None and prev[1] and not important:
-                continue
-            winning[side] = (raw, important)
+            _cascade_put(winning, side, raw, important)
     return {side: val for side, (val, _imp) in winning.items()}
 
 

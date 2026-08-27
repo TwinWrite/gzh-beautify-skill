@@ -252,6 +252,7 @@ FORBIDDEN_THEME_TAGS = {
     "html": "出现 <html>/<head>/<body>，组件须为可粘贴片段",
     "head": "出现 <html>/<head>/<body>，组件须为可粘贴片段",
     "body": "出现 <html>/<head>/<body>，组件须为可粘贴片段",
+    "title": "出现 <title>，组件须为可粘贴片段",
     "select": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
     "option": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
     "optgroup": "禁止 <select>/<option>/<optgroup>，无法保留 span[leaf]",
@@ -712,28 +713,38 @@ def normalize_sig_token(token: str) -> str:
 
 
 def recipe_positive_body(body: str) -> str:
-    """Recipe text with exclusion verb + following slot/sig tokens removed."""
+    """Recipe text with exclusion verb + coordinated slot/sig tokens removed."""
     slot_alt = "|".join(re.escape(s) for s in REQUIRED_SLOTS)
     ident = rf"(?:slot:)?(?:{slot_alt})|sig:[a-z0-9-]+|sig-[a-z0-9-]+"
+    token = rf"\s*`?(?:{ident})"
+    connector = r"(?:和|与|以及|还有|及|、|,|，)"
     pieces: list[str] = []
     i = 0
     for match in RECIPE_EXCLUDE_VERB.finditer(body):
         pieces.append(body[i : match.start()])
         rest = body[match.end() :]
-        found = re.match(rf"\s*`?(?:{ident})", rest, re.I)
-        i = match.end() + (found.end() if found else 0)
+        found = re.match(token, rest, re.I)
+        consumed = found.end() if found else 0
+        more = rest[consumed:]
+        while found:
+            extra = re.match(rf"\s*{connector}{token}", more, re.I)
+            if not extra:
+                break
+            consumed += extra.end()
+            more = rest[consumed:]
+        i = match.end() + consumed
     pieces.append(body[i:])
     return "".join(pieces)
 
 
 def recipe_has_declared_sig(body: str, sig_ids: set[str]) -> bool:
-    declared = {item.lower() for item in sig_ids}
+    declared = {normalize_sig_token(item) for item in sig_ids}
     return any(normalize_sig_token(match.group(0)) in declared for match in RECIPE_SIG.finditer(body))
 
 
 def recipe_has_exclude(body: str, *, sig_ids: set[str]) -> bool:
     """True when an exclusion verb is followed by a declared slot or signature id."""
-    declared_sigs = {item.lower() for item in sig_ids}
+    declared_sigs = {normalize_sig_token(item) for item in sig_ids}
     slot_alt = "|".join(re.escape(s) for s in REQUIRED_SLOTS)
     for match in RECIPE_EXCLUDE_VERB.finditer(body):
         rest = body[match.end() :]
@@ -887,9 +898,11 @@ class _FenceUsableCollector(HTMLParser):
         if at_root:
             self.top_level.append(ltag)
         self.tags.append(ltag)
-        for _name, value in attrs:
-            if value and PLACEHOLDER.search(value):
-                self.has_placeholder = True
+        skipping = ltag in SKIP_TAGS or any(t in SKIP_TAGS for t in self.stack)
+        if not skipping:
+            for _name, value in attrs:
+                if value and PLACEHOLDER.search(value):
+                    self.has_placeholder = True
         if ltag not in VOID_TAGS:
             self.stack.append(ltag)
 
@@ -903,6 +916,10 @@ class _FenceUsableCollector(HTMLParser):
                 return
 
     def handle_data(self, data: str) -> None:
+        if not self.stack and (data or "").strip():
+            self.top_level.append("#text")
+        if any(t in SKIP_TAGS for t in self.stack):
+            return
         if PLACEHOLDER.search(data or ""):
             self.has_placeholder = True
 
@@ -1036,6 +1053,22 @@ def normalize_style(style: str) -> str:
     return decode_css_escapes(strip_css_comments(style or ""))
 
 
+def css_numeric_opacity(token: str) -> float | None:
+    """Parse a number, percentage, or simple calc() wrapping either."""
+    text = (token or "").strip().lower()
+    if text.startswith("calc(") and text.endswith(")"):
+        return css_numeric_opacity(text[5:-1])
+    if text.endswith("%"):
+        try:
+            return float(text[:-1]) / 100.0
+        except ValueError:
+            return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def css_decl_value_applies(prop: str, token: str) -> bool:
     """False when a declaration value is ignored by CSS (invalid token)."""
     if not token:
@@ -1045,12 +1078,10 @@ def css_decl_value_applies(prop: str, token: str) -> bool:
     if prop == "visibility":
         return token in _CSS_VIS_OK
     if prop == "opacity":
-        raw = token[:-1] if token.endswith("%") else token
-        try:
-            float(raw)
+        if css_numeric_opacity(token) is not None:
             return True
-        except ValueError:
-            return False
+        low = token.lower()
+        return low.startswith("calc(") and low.endswith(")")
     return True
 
 
@@ -1147,6 +1178,46 @@ def has_css_declaration(style: str) -> bool:
     return False
 
 
+def _cascade_put(winning: dict, key: str, value, important: bool) -> None:
+    prev = winning.get(key)
+    if prev is not None and prev[1] and not important:
+        return
+    winning[key] = (value, important)
+
+
+def _apply_all_reset(winning: dict, important: bool, keyword: str = "initial") -> None:
+    for key in list(winning):
+        if key in {"unicode-bidi", "direction"}:
+            continue
+        _cascade_put(winning, key, keyword, important)
+
+
+_FONT_PREFIX = frozenset({
+    "normal", "italic", "oblique", "bold", "bolder", "lighter", "small-caps",
+    "ultra-condensed", "extra-condensed", "condensed", "semi-condensed",
+    "semi-expanded", "expanded", "extra-expanded", "ultra-expanded",
+})
+_FONT_SYSTEM = frozenset({
+    "caption", "icon", "menu", "message-box", "small-caption", "status-bar",
+})
+
+
+def font_shorthand_size(value: str) -> str | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    low = text.lower()
+    if low in _FONT_SYSTEM:
+        return low
+    for tok in text.split():
+        piece = tok.split("/", 1)[0]
+        pl = piece.lower()
+        if pl in _FONT_PREFIX or re.fullmatch(r"[1-9]00", pl):
+            continue
+        return piece
+    return None
+
+
 def winning_style_decls(style: str) -> dict[str, tuple[str, bool]]:
     """Winning CSS declarations: prop -> (token, important)."""
     winning: dict[str, tuple[str, bool]] = {}
@@ -1154,12 +1225,12 @@ def winning_style_decls(style: str) -> dict[str, tuple[str, bool]]:
         important = bool(CSS_IMPORTANT.search(value))
         raw = CSS_IMPORTANT.sub("", value).strip()
         token = raw.split()[0].lower() if raw else ""
+        if prop == "all":
+            _apply_all_reset(winning, important, token or "initial")
+            continue
         if not css_decl_value_applies(prop, token):
             continue
-        prev = winning.get(prop)
-        if prev is not None and prev[1] and not important:
-            continue
-        winning[prop] = (token, important)
+        _cascade_put(winning, prop, token, important)
     return winning
 
 
@@ -1170,12 +1241,17 @@ def winning_style_raw(style: str) -> dict[str, str]:
         important = bool(CSS_IMPORTANT.search(value))
         raw = CSS_IMPORTANT.sub("", value).strip().lower()
         token = raw.split()[0] if raw else ""
+        if prop == "all":
+            _apply_all_reset(winning, important, token or "initial")
+            continue
+        if prop == "font":
+            size = font_shorthand_size(raw)
+            if size:
+                _cascade_put(winning, "font-size", size, important)
+            continue
         if prop in {"display", "opacity", "visibility"} and not css_decl_value_applies(prop, token):
             continue
-        prev = winning.get(prop)
-        if prev is not None and prev[1] and not important:
-            continue
-        winning[prop] = (raw, important)
+        _cascade_put(winning, prop, raw, important)
     return {prop: raw for prop, (raw, _imp) in winning.items()}
 
 
@@ -1197,21 +1273,18 @@ def winning_margin_sides(style: str) -> dict[str, str]:
     for prop, value in iter_css_declarations(style):
         important = bool(CSS_IMPORTANT.search(value))
         raw = CSS_IMPORTANT.sub("", value).strip().lower()
+        if prop == "all":
+            _apply_all_reset(winning, important, raw.split()[0] if raw else "initial")
+            continue
         if prop == "margin":
             expanded = _expand_box_sides(raw.split())
             if not expanded:
                 continue
             for side, val in zip(("top", "right", "bottom", "left"), expanded):
-                prev = winning.get(side)
-                if prev is not None and prev[1] and not important:
-                    continue
-                winning[side] = (val, important)
+                _cascade_put(winning, side, val, important)
         elif prop in {"margin-top", "margin-right", "margin-bottom", "margin-left"}:
             side = prop.split("-", 1)[1]
-            prev = winning.get(side)
-            if prev is not None and prev[1] and not important:
-                continue
-            winning[side] = (raw, important)
+            _cascade_put(winning, side, raw, important)
     return {side: val for side, (val, _imp) in winning.items()}
 
 
@@ -1275,11 +1348,11 @@ def winning_style_tokens(style: str) -> dict[str, str]:
 def _opacity_is_zero(token: str) -> bool:
     if not token:
         return False
-    raw_token = token[:-1] if token.endswith("%") else token
-    try:
-        return float(raw_token) == 0
-    except ValueError:
-        return False
+    num = css_numeric_opacity(token)
+    if num is not None:
+        return num == 0
+    low = token.strip().lower()
+    return low.startswith("calc(") and low.endswith(")")
 
 
 def inline_style_hard_hides(style: str) -> bool:
@@ -1814,6 +1887,13 @@ def collect_active_style_blocks(html: str) -> list[tuple[dict[str, str], str]]:
     return collector.blocks
 
 
+def style_block_is_css(attrs: dict[str, str] | None) -> bool:
+    """True when a <style> element is treated as a CSS stylesheet."""
+    raw = (attrs or {}).get("type", "")
+    mime = raw.split(";", 1)[0].strip().lower()
+    return mime in {"", "text/css"}
+
+
 def _css_consume_block(text: str, i: int) -> tuple[str, int]:
     """text[i] is '{'. Return (inner, index after the matching '}')."""
     n = len(text)
@@ -1973,6 +2053,8 @@ def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[
     rules: list[tuple[str, dict[str, tuple[str, bool]], int | None]] = []
     layer_state = _new_layer_state()
     for attrs, block in collect_active_style_blocks(html):
+        if not style_block_is_css(attrs):
+            continue
         screen = media_applies_to_screen(attrs.get("media") if "media" in attrs else None)
         for selector_text, body, layer_index in iter_css_style_rules(
             block, active=screen, layer_state=layer_state
@@ -2470,6 +2552,10 @@ def css_attr_pseudo_matches(name: str, tag: str, attrs) -> bool | None:
             key.lower() == "contenteditable" and (value or "").lower() not in {"false", "inherit"}
             for key, value in attrs
         )
+    if name in {"link", "any-link"}:
+        if tag not in {"a", "area", "link"}:
+            return False
+        return has("href")
     return None
 
 
@@ -2556,11 +2642,15 @@ def css_pseudos_state(compound: str, tag: str, attrs, *, ctx: dict | None = None
     for name, arg, is_element, malformed in iter_compound_pseudos(compound):
         if malformed or is_element:
             return None
-        if name in CSS_STATE_PSEUDOS:
+        if name in CSS_STATE_PSEUDOS or name in {"link", "any-link"}:
             attr_state = css_attr_pseudo_matches(name, tag, attrs)
             if attr_state is True:
                 continue
-            return False
+            if attr_state is False:
+                return False
+            if name in CSS_STATE_PSEUDOS:
+                return False
+            return None
         if name in {"not", "is", "where"}:
             if arg is None:
                 return None
@@ -3435,6 +3525,7 @@ THEME_RAW_UNSAFE = [
     (re.compile(r"<html\b", re.I), "出现 <html>/<head>/<body>，组件须为可粘贴片段"),
     (re.compile(r"<head\b", re.I), "出现 <html>/<head>/<body>，组件须为可粘贴片段"),
     (re.compile(r"<body\b", re.I), "出现 <html>/<head>/<body>，组件须为可粘贴片段"),
+    (re.compile(r"<title\b", re.I), "出现 <title>，组件须为可粘贴片段"),
     (re.compile(r"</div\b", re.I), "出现 <div>，请用 <section>"),
 ]
 
