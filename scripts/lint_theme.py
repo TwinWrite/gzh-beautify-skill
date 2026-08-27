@@ -898,11 +898,6 @@ class _FenceUsableCollector(HTMLParser):
         if at_root:
             self.top_level.append(ltag)
         self.tags.append(ltag)
-        skipping = ltag in SKIP_TAGS or any(t in SKIP_TAGS for t in self.stack)
-        if not skipping:
-            for _name, value in attrs:
-                if value and PLACEHOLDER.search(value):
-                    self.has_placeholder = True
         if ltag not in VOID_TAGS:
             self.stack.append(ltag)
 
@@ -935,7 +930,7 @@ def html_fence_usable(body: str, kind: str, ident: str) -> bool:
         pass
     if ident == "root":
         return collector.top_level == ["section"]
-    if collector.has_placeholder or PLACEHOLDER.search(visible):
+    if collector.has_placeholder:
         return True
     if kind == "sig":
         return False
@@ -1185,11 +1180,51 @@ def _cascade_put(winning: dict, key: str, value, important: bool) -> None:
     winning[key] = (value, important)
 
 
-def _apply_all_reset(winning: dict, important: bool, keyword: str = "initial") -> None:
-    for key in list(winning):
+def _apply_all_reset(
+    winning: dict,
+    important: bool,
+    keyword: str = "initial",
+    extras: dict | None = None,
+) -> None:
+    kw = (keyword or "initial").split()[0].lower()
+    extras = extras or {}
+    keys = set(winning) | set(extras)
+    for key in keys:
         if key in {"unicode-bidi", "direction"}:
             continue
-        _cascade_put(winning, key, keyword, important)
+        if key in extras:
+            initial = extras[key]
+            if kw == "inherit":
+                val = "inherit"
+            elif kw == "unset":
+                val = "inherit" if key == "visibility" else initial
+            elif kw in {"initial", "revert", "revert-layer"}:
+                val = initial
+            else:
+                val = kw
+        else:
+            val = kw
+        _cascade_put(winning, key, val, important)
+
+
+_DECL_ALL_INITIAL = {
+    "display": "inline",
+    "opacity": "1",
+    "visibility": "visible",
+}
+_LAYOUT_ALL_INITIAL = {
+    "max-width": "none",
+    "height": "auto",
+    "display": "inline",
+    "font-size": "medium",
+    "visibility": "visible",
+}
+_MARGIN_ALL_INITIAL = {
+    "top": "0",
+    "right": "0",
+    "bottom": "0",
+    "left": "0",
+}
 
 
 _FONT_PREFIX = frozenset({
@@ -1200,6 +1235,28 @@ _FONT_PREFIX = frozenset({
 _FONT_SYSTEM = frozenset({
     "caption", "icon", "menu", "message-box", "small-caption", "status-bar",
 })
+
+
+def css_font_size_value_ok(raw: str) -> bool:
+    """True when a font-size declaration is a single valid size token (or calc())."""
+    text = (raw or "").strip().lower()
+    if not text:
+        return False
+    if text.startswith("calc("):
+        return text.endswith(")")
+    parts = text.split()
+    if len(parts) != 1:
+        return False
+    token = parts[0]
+    if token in {
+        "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large",
+        "xxx-large", "larger", "smaller", "math",
+    }:
+        return True
+    return bool(re.fullmatch(
+        r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:[a-z%]+)?",
+        token,
+    ))
 
 
 def font_shorthand_size(value: str) -> str | None:
@@ -1226,7 +1283,7 @@ def winning_style_decls(style: str) -> dict[str, tuple[str, bool]]:
         raw = CSS_IMPORTANT.sub("", value).strip()
         token = raw.split()[0].lower() if raw else ""
         if prop == "all":
-            _apply_all_reset(winning, important, token or "initial")
+            _apply_all_reset(winning, important, token or "initial", extras=_DECL_ALL_INITIAL)
             continue
         if not css_decl_value_applies(prop, token):
             continue
@@ -1242,12 +1299,14 @@ def winning_style_raw(style: str) -> dict[str, str]:
         raw = CSS_IMPORTANT.sub("", value).strip().lower()
         token = raw.split()[0] if raw else ""
         if prop == "all":
-            _apply_all_reset(winning, important, token or "initial")
+            _apply_all_reset(winning, important, token or "initial", extras=_LAYOUT_ALL_INITIAL)
             continue
         if prop == "font":
             size = font_shorthand_size(raw)
             if size:
                 _cascade_put(winning, "font-size", size, important)
+            continue
+        if prop == "font-size" and not css_font_size_value_ok(raw):
             continue
         if prop in {"display", "opacity", "visibility"} and not css_decl_value_applies(prop, token):
             continue
@@ -1274,7 +1333,7 @@ def winning_margin_sides(style: str) -> dict[str, str]:
         important = bool(CSS_IMPORTANT.search(value))
         raw = CSS_IMPORTANT.sub("", value).strip().lower()
         if prop == "all":
-            _apply_all_reset(winning, important, raw.split()[0] if raw else "initial")
+            _apply_all_reset(winning, important, raw.split()[0] if raw else "initial", extras=_MARGIN_ALL_INITIAL)
             continue
         if prop == "margin":
             expanded = _expand_box_sides(raw.split())
@@ -1720,8 +1779,18 @@ def _media_feature_applies(name: str, value: str) -> bool:
         return token in {"", "none"}
     if name == "grid":
         return token in {"", "0"}
-    if name == "color":
-        return True if not token else token.isdigit() and int(token) <= 8
+    if name in {"color", "min-color", "max-color"}:
+        actual = 8
+        if not token:
+            return name == "color"
+        if not token.isdigit():
+            return False
+        bits = int(token)
+        if name.startswith("min"):
+            return actual >= bits
+        if name.startswith("max"):
+            return actual <= bits
+        return bits <= actual
     if name == "update":
         return token in {"", "fast"}
     if name == "scripting":
@@ -2542,7 +2611,16 @@ def css_attr_pseudo_matches(name: str, tag: str, attrs) -> bool | None:
     if name == "optional":
         return tag in FORM_CTRL_TAGS and not has("required")
     if name == "read-only":
-        return has("readonly")
+        if has("readonly"):
+            return True
+        if any(
+            key.lower() == "contenteditable" and (value or "").lower() not in {"false", "inherit"}
+            for key, value in attrs
+        ):
+            return False
+        if tag in {"input", "textarea"}:
+            return False
+        return True
     if name == "read-write":
         if has("readonly"):
             return False
@@ -2764,12 +2842,23 @@ def css_compound_matches(compound: str, tag: str, attrs, *, ctx: dict | None = N
     return state is True
 
 
+def _ancestor_ctx(anc, ancestors_prefix) -> dict:
+    following = anc[3] if len(anc) > 3 else None
+    return {
+        "prev_siblings": anc[2],
+        "ancestors": ancestors_prefix,
+        "empty": None,
+        "is_last": None if following is None else (not following),
+        "following_siblings": following,
+    }
+
+
 def _css_match_chain(
     compounds: list[str],
     combs: list[str],
     tag: str,
     attrs,
-    ancestors: list[tuple[str, object, list]],
+    ancestors: list,
     prev_siblings: list[tuple[str, object]],
     ctx: dict | None = None,
 ) -> bool:
@@ -2791,12 +2880,28 @@ def _css_match_chain(
     if comb == ">":
         if not ancestors:
             return False
-        ptag, pattrs, pprev = ancestors[-1]
-        return _css_match_chain(left_compounds, left_combs, ptag, pattrs, ancestors[:-1], pprev)
+        ptag, pattrs, pprev = ancestors[-1][0], ancestors[-1][1], ancestors[-1][2]
+        return _css_match_chain(
+            left_compounds,
+            left_combs,
+            ptag,
+            pattrs,
+            ancestors[:-1],
+            pprev,
+            _ancestor_ctx(ancestors[-1], ancestors[:-1]),
+        )
     if comb == " ":
         for j in range(len(ancestors) - 1, -1, -1):
-            atag, aattrs, aprev = ancestors[j]
-            if _css_match_chain(left_compounds, left_combs, atag, aattrs, ancestors[:j], aprev):
+            atag, aattrs, aprev = ancestors[j][0], ancestors[j][1], ancestors[j][2]
+            if _css_match_chain(
+                left_compounds,
+                left_combs,
+                atag,
+                aattrs,
+                ancestors[:j],
+                aprev,
+                _ancestor_ctx(ancestors[j], ancestors[:j]),
+            ):
                 return True
         return False
     if comb == "+":
@@ -2987,6 +3092,51 @@ class PreviewMarkerCollector(HTMLParser):
     def _sheet_hides_element(self, disp_none: bool, opac0: bool, vis: str | None) -> bool:
         return disp_none or opac0 or vis in {"hidden", "collapse"}
 
+    def _effective_hidden(
+        self,
+        tag: str,
+        attrs,
+        *,
+        empty: bool | None = None,
+        is_last: bool | None = None,
+        ancestors: list | None = None,
+        prev_siblings: list | None = None,
+        following_siblings: list | None = None,
+    ) -> bool:
+        sheet_display_none, sheet_display_imp, sheet_opacity_zero, sheet_opacity_imp, sheet_vis, sheet_vis_imp = (
+            self._sheet_hide(
+                tag,
+                attrs,
+                empty=empty,
+                is_last=is_last,
+                ancestors=ancestors,
+                prev_siblings=prev_siblings,
+                following_siblings=following_siblings,
+            )
+        )
+        style = next((value or "" for name, value in attrs if name.lower() == "style"), "")
+        inline_decls = winning_style_decls(style)
+
+        def cascade_hide(sheet_on: bool, sheet_imp: bool, prop: str, hides) -> bool:
+            if prop not in inline_decls:
+                return sheet_on
+            token, imp = inline_decls[prop]
+            if sheet_on and sheet_imp and not imp:
+                return True
+            return hides(token)
+
+        display_none = cascade_hide(sheet_display_none, sheet_display_imp, "display", lambda t: t == "none")
+        opacity_zero = cascade_hide(sheet_opacity_zero, sheet_opacity_imp, "opacity", _opacity_is_zero)
+        if "visibility" in inline_decls:
+            token, imp = inline_decls["visibility"]
+            if sheet_vis in {"hidden", "collapse"} and sheet_vis_imp and not imp:
+                vis = sheet_vis
+            else:
+                vis = token if token in {"hidden", "visible", "collapse"} else None
+        else:
+            vis = sheet_vis
+        return self._sheet_hides_element(display_none, opacity_zero, vis)
+
     def _drop_chunk_range(self, start: int, end: int) -> None:
         if start < 0:
             start = 0
@@ -2995,26 +3145,52 @@ class PreviewMarkerCollector(HTMLParser):
         if start < end:
             self.chunks = self.chunks[:start] + self.chunks[end:]
 
+    def _patch_ancestor_following(self, meta: dict, ancestor_attrs, following: list) -> None:
+        ancs = list(meta.get("ancestors") or [])
+        patched: list = []
+        for anc in ancs:
+            if len(anc) >= 2 and anc[1] is ancestor_attrs:
+                patched.append((anc[0], anc[1], anc[2], following))
+            else:
+                patched.append(anc)
+        meta["ancestors"] = patched
+        for child in meta.get("child_metas") or []:
+            self._patch_ancestor_following(child, ancestor_attrs, following)
+
+    def _rehide_subtree(self, node: dict, following: list) -> None:
+        if not node.get("skip"):
+            empty = not node.get("had_text") and not node.get("had_element")
+            if self._effective_hidden(
+                node["tag"],
+                node["attrs"],
+                empty=empty,
+                is_last=not following,
+                following_siblings=following,
+                ancestors=node.get("ancestors"),
+                prev_siblings=node.get("prev"),
+            ):
+                self._drop_chunk_range(node.get("chunk_at", 0), node.get("chunk_end", 0))
+                return
+        kids = list(node.get("child_metas") or [])
+        sibs = [(child["tag"], child["attrs"]) for child in kids]
+        for child in reversed(kids):
+            idx = len(child.get("prev") or [])
+            child_following = sibs[idx + 1 :] if idx + 1 <= len(sibs) else []
+            child["following"] = child_following
+            for desc in child.get("child_metas") or []:
+                self._patch_ancestor_following(desc, child["attrs"], child_following)
+            self._rehide_subtree(child, child_following)
+
     def _hide_children_by_final_siblings(self, parent_meta: dict, siblings: list) -> None:
         """Re-evaluate reverse-position pseudos once a parent's children are complete."""
         children = list(parent_meta.get("child_metas") or [])
         for child in reversed(children):
-            if child.get("skip"):
-                continue
             idx = len(child.get("prev") or [])
             following = siblings[idx + 1 :] if idx + 1 <= len(siblings) else []
-            empty = not child.get("had_text") and not child.get("had_element")
-            disp_none, _, opac0, _, vis, _ = self._sheet_hide(
-                child["tag"],
-                child["attrs"],
-                empty=empty,
-                is_last=not following,
-                following_siblings=following,
-                ancestors=child["ancestors"],
-                prev_siblings=child["prev"],
-            )
-            if self._sheet_hides_element(disp_none, opac0, vis):
-                self._drop_chunk_range(child.get("chunk_at", 0), child.get("chunk_end", 0))
+            child["following"] = following
+            for desc in child.get("child_metas") or []:
+                self._patch_ancestor_following(desc, child["attrs"], following)
+            self._rehide_subtree(child, following)
 
     def _open(self, tag: str, attrs) -> None:
         ltag = tag.lower()
@@ -3099,7 +3275,7 @@ class PreviewMarkerCollector(HTMLParser):
         prev = list(self.level_children[-1])
         self.stack.append((ltag, skip, hard, opened_closed_details, opened_summary, fallback))
         self.level_children[-1].append((ltag, attrs))
-        self.dom_open.append((ltag, attrs, prev))
+        self.dom_open.append((ltag, attrs, prev, None))
         self.level_children.append([])
         self.open_meta.append({
             "chunk_at": chunk_at,
@@ -3135,14 +3311,15 @@ class PreviewMarkerCollector(HTMLParser):
                     if meta and not meta["skip"]:
                         empty = not meta["had_text"] and not meta["had_element"]
                         if empty:
-                            disp_none, _, opac0, _, vis, _ = self._sheet_hide(
+                            if self._effective_hidden(
                                 meta["tag"],
                                 meta["attrs"],
                                 empty=True,
                                 ancestors=meta["ancestors"],
                                 prev_siblings=meta["prev"],
-                            )
-                            if self._sheet_hides_element(disp_none, opac0, vis):
+                                following_siblings=meta.get("following"),
+                                is_last=None if meta.get("following") is None else not meta.get("following"),
+                            ):
                                 self.chunks = self.chunks[: meta["chunk_at"]]
                     if meta is not None:
                         meta["chunk_end"] = len(self.chunks)

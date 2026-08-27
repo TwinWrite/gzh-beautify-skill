@@ -540,11 +540,51 @@ def _cascade_put(winning: dict, key: str, value, important: bool) -> None:
     winning[key] = (value, important)
 
 
-def _apply_all_reset(winning: dict, important: bool, keyword: str = "initial") -> None:
-    for key in list(winning):
+def _apply_all_reset(
+    winning: dict,
+    important: bool,
+    keyword: str = "initial",
+    extras: dict | None = None,
+) -> None:
+    kw = (keyword or "initial").split()[0].lower()
+    extras = extras or {}
+    keys = set(winning) | set(extras)
+    for key in keys:
         if key in {"unicode-bidi", "direction"}:
             continue
-        _cascade_put(winning, key, keyword, important)
+        if key in extras:
+            initial = extras[key]
+            if kw == "inherit":
+                val = "inherit"
+            elif kw == "unset":
+                val = "inherit" if key == "visibility" else initial
+            elif kw in {"initial", "revert", "revert-layer"}:
+                val = initial
+            else:
+                val = kw
+        else:
+            val = kw
+        _cascade_put(winning, key, val, important)
+
+
+_DECL_ALL_INITIAL = {
+    "display": "inline",
+    "opacity": "1",
+    "visibility": "visible",
+}
+_LAYOUT_ALL_INITIAL = {
+    "max-width": "none",
+    "height": "auto",
+    "display": "inline",
+    "font-size": "medium",
+    "visibility": "visible",
+}
+_MARGIN_ALL_INITIAL = {
+    "top": "0",
+    "right": "0",
+    "bottom": "0",
+    "left": "0",
+}
 
 
 _FONT_PREFIX = frozenset({
@@ -573,6 +613,27 @@ def font_shorthand_size(value: str) -> str | None:
     return None
 
 
+def css_font_size_value_ok(raw: str) -> bool:
+    text = (raw or "").strip().lower()
+    if not text:
+        return False
+    if text.startswith("calc("):
+        return text.endswith(")")
+    parts = text.split()
+    if len(parts) != 1:
+        return False
+    token = parts[0]
+    if token in {
+        "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large",
+        "xxx-large", "larger", "smaller", "math",
+    }:
+        return True
+    return bool(re.fullmatch(
+        r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:[a-z%]+)?",
+        token,
+    ))
+
+
 def winning_style_raw(style: str) -> dict[str, str]:
     """Winning CSS declarations: prop -> full value (without !important)."""
     winning: dict[str, tuple[str, bool]] = {}
@@ -581,12 +642,14 @@ def winning_style_raw(style: str) -> dict[str, str]:
         raw = CSS_IMPORTANT.sub("", value).strip().lower()
         token = raw.split()[0] if raw else ""
         if prop == "all":
-            _apply_all_reset(winning, important, token or "initial")
+            _apply_all_reset(winning, important, token or "initial", extras=_LAYOUT_ALL_INITIAL)
             continue
         if prop == "font":
             size = font_shorthand_size(raw)
             if size:
                 _cascade_put(winning, "font-size", size, important)
+            continue
+        if prop == "font-size" and not css_font_size_value_ok(raw):
             continue
         _cascade_put(winning, prop, raw, important)
     return {prop: raw for prop, (raw, _imp) in winning.items()}
@@ -610,7 +673,7 @@ def winning_margin_sides(style: str) -> dict[str, str]:
         important = bool(CSS_IMPORTANT.search(value))
         raw = CSS_IMPORTANT.sub("", value).strip().lower()
         if prop == "all":
-            _apply_all_reset(winning, important, raw.split()[0] if raw else "initial")
+            _apply_all_reset(winning, important, raw.split()[0] if raw else "initial", extras=_MARGIN_ALL_INITIAL)
             continue
         if prop == "margin":
             expanded = _expand_box_sides(raw.split())

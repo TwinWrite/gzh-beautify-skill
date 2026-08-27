@@ -372,6 +372,16 @@ def main() -> int:
         f"font:100px 简写应超过 24px: {fss_err}",
     )
 
+    malformed_size = styled_root(
+        '<p style="font-size:100px;font-size:16px bogus;margin:0 0 16px;color:#1F2937;">'
+        '<span leaf="">正文。</span></p>'
+    )
+    mfs_err, _, _ = validate_article.validate(malformed_size)
+    assert_true(
+        any("font-size" in e and "24" in e for e in mfs_err),
+        f"无效 font-size:16px bogus 不应覆盖 100px: {mfs_err}",
+    )
+
     bogus_only_style = styled_root(
         '<p style="made-up:bogus"><span leaf="">正文。</span></p>'
     )
@@ -1736,6 +1746,79 @@ def main() -> int:
             f"type=text/plain 的 style 不应应用 CSS: {pss_err}",
         )
 
+        min_color_sheet = Path(tmp) / "min-color-pack"
+        write_mini_theme(min_color_sheet)
+        mcs = (min_color_sheet / "preview.html").read_text(encoding="utf-8")
+        mcs = mcs.replace(
+            "</head>",
+            "<style>@media (min-color:1){#footer{display:none}}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (min_color_sheet / "preview.html").write_text(mcs, encoding="utf-8")
+        mcs_err, _ = lint_theme.lint_theme(min_color_sheet, schema)
+        assert_has(mcs_err, "slot:footer", "@media (min-color:1) 内的隐藏规则应生效")
+
+        empty_inline_sheet = Path(tmp) / "empty-inline-pack"
+        write_mini_theme(empty_inline_sheet)
+        eis = (empty_inline_sheet / "preview.html").read_text(encoding="utf-8")
+        eis = eis.replace(
+            "</head>",
+            "<style>#footer:empty{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer" data-slot="slot:footer" style="display:block"></p>',
+        )
+        (empty_inline_sheet / "preview.html").write_text(eis, encoding="utf-8")
+        eis_err, _ = lint_theme.lint_theme(empty_inline_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in eis_err),
+            f"inline display:block 应压过 :empty 的 display:none: {eis_err}",
+        )
+
+        all_vis_sheet = Path(tmp) / "all-initial-vis-pack"
+        write_mini_theme(all_vis_sheet)
+        avs = (all_vis_sheet / "preview.html").read_text(encoding="utf-8")
+        avs = avs.replace(
+            "<p>slot:footer</p>",
+            '<div style="visibility:hidden"><span id="footer" data-slot="slot:footer" style="all:initial">slot:footer</span></div>',
+        )
+        (all_vis_sheet / "preview.html").write_text(avs, encoding="utf-8")
+        avs_err, _ = lint_theme.lint_theme(all_vis_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in avs_err),
+            f"all:initial 应重置继承的 visibility:hidden: {avs_err}",
+        )
+
+        readonly_sheet = Path(tmp) / "readonly-p-pack"
+        write_mini_theme(readonly_sheet)
+        ros = (readonly_sheet / "preview.html").read_text(encoding="utf-8")
+        ros = ros.replace(
+            "</head>",
+            "<style>p:read-only{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer" data-slot="slot:footer">slot:footer</p>',
+        )
+        (readonly_sheet / "preview.html").write_text(ros, encoding="utf-8")
+        ros_err, _ = lint_theme.lint_theme(readonly_sheet, schema)
+        assert_has(ros_err, "slot:footer", "p:read-only 隐藏的页脚不应算覆盖")
+
+        ancestor_last_sheet = Path(tmp) / "ancestor-last-child-pack"
+        write_mini_theme(ancestor_last_sheet)
+        als2 = (ancestor_last_sheet / "preview.html").read_text(encoding="utf-8")
+        als2 = als2.replace(
+            "</head>",
+            "<style>section:last-child #footer{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<div><p>before</p><section><p id="footer">slot:footer</p></section></div>',
+        )
+        (ancestor_last_sheet / "preview.html").write_text(als2, encoding="utf-8")
+        als2_err, _ = lint_theme.lint_theme(ancestor_last_sheet, schema)
+        assert_has(als2_err, "slot:footer", "祖先 :last-child 隐藏的页脚不应算覆盖")
+
         bogus_display_sheet = Path(tmp) / "bogus-display-sheet-pack"
         write_mini_theme(bogus_display_sheet)
         bds = (bogus_display_sheet / "preview.html").read_text(encoding="utf-8")
@@ -2639,6 +2722,25 @@ def main() -> int:
         assert_true(
             any("title" in msg.lower() for _, msg in title_comp),
             f"组件仅有 title 应失败: {title_comp}",
+        )
+
+        attr_ph = lint_theme.html_fence_usable(
+            '<p style="color:red" title="{{body}}"></p>',
+            "slot",
+            "footer",
+        )
+        assert_true(not attr_ph, "属性里的占位不应算可用内容")
+
+        attr_ph_comp = lint_theme.lint_html_block(
+            '<p style="color:red" title="{{body}}"></p>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("可用内容" in msg or "占位" in msg for _, msg in attr_ph_comp)
+            or not lint_theme.html_fence_usable(
+                '<p style="color:red" title="{{body}}"></p>', "slot", "footer"
+            ),
+            f"title 属性占位的空 p 应失败: {attr_ph_comp}",
         )
 
         root_oops_theme = Path(tmp) / "root-oops-theme-pack"
