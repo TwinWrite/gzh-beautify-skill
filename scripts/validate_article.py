@@ -419,6 +419,55 @@ _CSS_ABS_PX = {
     "mm": 96.0 / 25.4,
     "q": 96.0 / 101.6,
 }
+_CSS_DISPLAY_OK = frozenset({
+    "none", "inline", "block", "inline-block", "flex", "inline-flex", "grid",
+    "inline-grid", "flow-root", "contents", "list-item", "table", "inline-table",
+    "table-row", "table-cell", "table-column", "table-column-group",
+    "table-header-group", "table-footer-group", "table-row-group", "table-caption",
+    "run-in", "-webkit-box", "-webkit-flex", "inherit", "initial", "unset",
+    "revert", "revert-layer",
+})
+_CSS_VIS_OK = frozenset({
+    "visible", "hidden", "collapse", "inherit", "initial", "unset", "revert", "revert-layer",
+})
+CSS_KNOWN_PROPS = frozenset({
+    "accent-color", "align-content", "align-items", "align-self", "all",
+    "animation", "appearance", "aspect-ratio", "background", "background-attachment",
+    "background-clip", "background-color", "background-image", "background-origin",
+    "background-position", "background-repeat", "background-size", "border",
+    "border-bottom", "border-bottom-color", "border-bottom-left-radius",
+    "border-bottom-right-radius", "border-bottom-style", "border-bottom-width",
+    "border-collapse", "border-color", "border-image", "border-left",
+    "border-left-color", "border-left-style", "border-left-width", "border-radius",
+    "border-right", "border-right-color", "border-right-style", "border-right-width",
+    "border-spacing", "border-style", "border-top", "border-top-color",
+    "border-top-left-radius", "border-top-right-radius", "border-top-style",
+    "border-top-width", "border-width", "bottom", "box-shadow", "box-sizing",
+    "caption-side", "caret-color", "clear", "clip-path", "color", "column-count",
+    "column-gap", "columns", "contain", "content", "cursor", "direction", "display",
+    "empty-cells", "filter", "flex", "flex-basis", "flex-direction", "flex-flow",
+    "flex-grow", "flex-shrink", "flex-wrap", "float", "font", "font-family",
+    "font-feature-settings", "font-kerning", "font-size", "font-stretch",
+    "font-style", "font-variant", "font-weight", "gap", "grid", "grid-area",
+    "grid-column", "grid-row", "grid-template", "grid-template-columns",
+    "grid-template-rows", "height", "hyphens", "inset", "isolation",
+    "justify-content", "justify-items", "justify-self", "left", "letter-spacing",
+    "line-break", "line-height", "list-style", "list-style-image",
+    "list-style-position", "list-style-type", "margin", "margin-bottom",
+    "margin-left", "margin-right", "margin-top", "mask", "max-height", "max-width",
+    "min-height", "min-width", "mix-blend-mode", "object-fit", "object-position",
+    "opacity", "order", "outline", "outline-color", "outline-offset", "outline-style",
+    "outline-width", "overflow", "overflow-wrap", "overflow-x", "overflow-y",
+    "padding", "padding-bottom", "padding-left", "padding-right", "padding-top",
+    "place-content", "place-items", "place-self", "pointer-events", "position",
+    "quotes", "resize", "right", "row-gap", "table-layout", "text-align",
+    "text-align-last", "text-decoration", "text-decoration-color",
+    "text-decoration-line", "text-decoration-style", "text-emphasis", "text-indent",
+    "text-overflow", "text-shadow", "text-transform", "text-underline-offset",
+    "top", "transform", "transform-origin", "transition", "unicode-bidi",
+    "user-select", "vertical-align", "visibility", "white-space", "width",
+    "will-change", "word-break", "word-spacing", "writing-mode", "z-index",
+})
 
 
 def iter_css_declarations(style: str):
@@ -433,10 +482,41 @@ def iter_css_declarations(style: str):
             yield prop, value
 
 
-def has_css_declaration(style: str) -> bool:
-    """True when style has at least one property with a non-empty value."""
-    for _ in iter_css_declarations(style):
+def css_decl_value_applies(prop: str, token: str) -> bool:
+    if not token:
+        return False
+    if prop == "display":
+        return token in _CSS_DISPLAY_OK or token.startswith("-")
+    if prop == "visibility":
+        return token in _CSS_VIS_OK
+    if prop == "opacity":
+        raw = token[:-1] if token.endswith("%") else token
+        try:
+            float(raw)
+            return True
+        except ValueError:
+            return False
+    return True
+
+
+def css_property_applies(prop: str) -> bool:
+    if prop.startswith("--"):
         return True
+    if prop.startswith("-") and prop.count("-") >= 2:
+        return True
+    return prop in CSS_KNOWN_PROPS
+
+
+def css_decl_is_applied(prop: str, value: str) -> bool:
+    token = CSS_IMPORTANT.sub("", value).strip().split()[0] if value.strip() else ""
+    return css_property_applies(prop) and css_decl_value_applies(prop, token)
+
+
+def has_css_declaration(style: str) -> bool:
+    """True when style has at least one supported property with a valid value."""
+    for prop, value in iter_css_declarations(style):
+        if css_decl_is_applied(prop, value):
+            return True
     return False
 
 
@@ -453,25 +533,50 @@ def winning_style_raw(style: str) -> dict[str, str]:
     return {prop: raw for prop, (raw, _imp) in winning.items()}
 
 
-def _margin_horizontal_auto(vals: dict[str, str]) -> bool:
-    if vals.get("margin-left") == "auto" and vals.get("margin-right") == "auto":
-        return True
-    parts = vals.get("margin", "").split()
+def _expand_box_sides(parts: list[str]) -> tuple[str, str, str, str] | None:
     if len(parts) == 1:
-        return parts[0] == "auto"
+        return parts[0], parts[0], parts[0], parts[0]
     if len(parts) == 2:
-        return parts[1] == "auto"
+        return parts[0], parts[1], parts[0], parts[1]
     if len(parts) == 3:
-        return parts[1] == "auto"
-    if len(parts) == 4:
-        return parts[1] == "auto" and parts[3] == "auto"
-    return False
+        return parts[0], parts[1], parts[2], parts[1]
+    if len(parts) >= 4:
+        return parts[0], parts[1], parts[2], parts[3]
+    return None
+
+
+def winning_margin_sides(style: str) -> dict[str, str]:
+    winning: dict[str, tuple[str, bool]] = {}
+    for prop, value in iter_css_declarations(style):
+        important = bool(CSS_IMPORTANT.search(value))
+        raw = CSS_IMPORTANT.sub("", value).strip().lower()
+        if prop == "margin":
+            expanded = _expand_box_sides(raw.split())
+            if not expanded:
+                continue
+            for side, val in zip(("top", "right", "bottom", "left"), expanded):
+                prev = winning.get(side)
+                if prev is not None and prev[1] and not important:
+                    continue
+                winning[side] = (val, important)
+        elif prop in {"margin-top", "margin-right", "margin-bottom", "margin-left"}:
+            side = prop.split("-", 1)[1]
+            prev = winning.get(side)
+            if prev is not None and prev[1] and not important:
+                continue
+            winning[side] = (raw, important)
+    return {side: val for side, (val, _imp) in winning.items()}
+
+
+def _margin_horizontal_auto(style: str) -> bool:
+    sides = winning_margin_sides(style)
+    return sides.get("left") == "auto" and sides.get("right") == "auto"
 
 
 def has_root_layout(style: str) -> bool:
     vals = winning_style_raw(style)
     mw = re.sub(r"\s+", "", vals.get("max-width", ""))
-    return mw == "677px" and _margin_horizontal_auto(vals)
+    return mw == "677px" and _margin_horizontal_auto(style)
 
 
 def has_responsive_image_style(style: str) -> bool:
@@ -479,7 +584,7 @@ def has_responsive_image_style(style: str) -> bool:
     mw = re.sub(r"\s+", "", vals.get("max-width", ""))
     height = re.sub(r"\s+", "", vals.get("height", ""))
     display = (vals.get("display", "").split() or [""])[0]
-    return mw == "100%" and height == "auto" and display == "block" and _margin_horizontal_auto(vals)
+    return mw == "100%" and height == "auto" and display == "block" and _margin_horizontal_auto(style)
 
 
 def css_length_px(value: str) -> float | None:
@@ -495,15 +600,14 @@ def css_length_px(value: str) -> float | None:
 
 
 def font_size_limit_hits(style: str) -> list[str]:
-    hits: list[str] = []
-    for prop, value in iter_css_declarations(style):
-        if prop != "font-size":
-            continue
-        token = CSS_IMPORTANT.sub("", value).strip().split()[0] if value.strip() else ""
-        px = css_length_px(token)
-        if px is None or px > 24:
-            hits.append(token)
-    return hits
+    raw = winning_style_raw(style).get("font-size", "")
+    if not raw:
+        return []
+    token = raw.split()[0]
+    px = css_length_px(token)
+    if px is None or px > 24:
+        return [token]
+    return []
 
 
 def attr_values(attrs, name: str) -> list[str]:

@@ -133,6 +133,61 @@ _CSS_VIS_OK = frozenset({
     "revert",
     "revert-layer",
 })
+CSS_KNOWN_PROPS = frozenset({
+    "accent-color", "align-content", "align-items", "align-self", "all",
+    "animation", "appearance", "aspect-ratio", "background", "background-attachment",
+    "background-clip", "background-color", "background-image", "background-origin",
+    "background-position", "background-repeat", "background-size", "border",
+    "border-bottom", "border-bottom-color", "border-bottom-left-radius",
+    "border-bottom-right-radius", "border-bottom-style", "border-bottom-width",
+    "border-collapse", "border-color", "border-image", "border-left",
+    "border-left-color", "border-left-style", "border-left-width", "border-radius",
+    "border-right", "border-right-color", "border-right-style", "border-right-width",
+    "border-spacing", "border-style", "border-top", "border-top-color",
+    "border-top-left-radius", "border-top-right-radius", "border-top-style",
+    "border-top-width", "border-width", "bottom", "box-decoration-break",
+    "box-shadow", "box-sizing", "break-after", "break-before", "break-inside",
+    "caption-side", "caret-color", "clear", "clip", "clip-path", "color",
+    "column-count", "column-gap", "column-rule", "column-span", "column-width",
+    "columns", "contain", "content", "cursor", "direction", "display",
+    "empty-cells", "filter", "flex", "flex-basis", "flex-direction", "flex-flow",
+    "flex-grow", "flex-shrink", "flex-wrap", "float", "font", "font-family",
+    "font-feature-settings", "font-kerning", "font-size", "font-size-adjust",
+    "font-stretch", "font-style", "font-variant", "font-variation-settings",
+    "font-weight", "gap", "grid", "grid-area", "grid-auto-columns", "grid-auto-flow",
+    "grid-auto-rows", "grid-column", "grid-row", "grid-template",
+    "grid-template-areas", "grid-template-columns", "grid-template-rows", "height",
+    "hyphens", "inset", "isolation", "justify-content", "justify-items",
+    "justify-self", "left", "letter-spacing", "line-break", "line-height",
+    "list-style", "list-style-image", "list-style-position", "list-style-type",
+    "margin", "margin-bottom", "margin-left", "margin-right", "margin-top",
+    "mask", "max-height", "max-width", "min-height", "min-width", "mix-blend-mode",
+    "object-fit", "object-position", "opacity", "order", "outline", "outline-color",
+    "outline-offset", "outline-style", "outline-width", "overflow", "overflow-wrap",
+    "overflow-x", "overflow-y", "padding", "padding-bottom", "padding-left",
+    "padding-right", "padding-top", "place-content", "place-items", "place-self",
+    "pointer-events", "position", "quotes", "resize", "right", "row-gap",
+    "table-layout", "text-align", "text-align-last", "text-decoration",
+    "text-decoration-color", "text-decoration-line", "text-decoration-style",
+    "text-emphasis", "text-indent", "text-justify", "text-overflow", "text-shadow",
+    "text-transform", "text-underline-offset", "top", "transform", "transform-origin",
+    "transition", "unicode-bidi", "user-select", "vertical-align", "visibility",
+    "white-space", "width", "will-change", "word-break", "word-spacing", "writing-mode",
+    "z-index",
+})
+_MEDIA_FEATURES = frozenset({
+    "width", "min-width", "max-width", "height", "min-height", "max-height",
+    "aspect-ratio", "min-aspect-ratio", "max-aspect-ratio", "orientation",
+    "resolution", "min-resolution", "max-resolution", "color", "min-color",
+    "max-color", "color-index", "min-color-index", "max-color-index",
+    "monochrome", "color-gamut", "grid", "update", "overflow-block",
+    "overflow-inline", "display-mode", "dynamic-range", "hover", "any-hover",
+    "pointer", "any-pointer", "prefers-color-scheme", "prefers-contrast",
+    "prefers-reduced-motion", "prefers-reduced-data", "forced-colors",
+    "inverted-colors", "scripting", "device-width", "min-device-width",
+    "max-device-width", "device-height", "min-device-height", "max-device-height",
+})
+_PREVIEW_VIEWPORT_PX = (1280.0, 800.0)
 _CSS_HEX = frozenset("0123456789abcdefABCDEF")
 _CSS_ESCAPE_WS = frozenset(" \t\n\r\f")
 HTML_TAG_NAME = re.compile(r"^[a-z][a-z0-9-]*$", re.I)
@@ -999,6 +1054,19 @@ def css_decl_value_applies(prop: str, token: str) -> bool:
     return True
 
 
+def css_property_applies(prop: str) -> bool:
+    if prop.startswith("--"):
+        return True
+    if prop.startswith("-") and prop.count("-") >= 2:
+        return True
+    return prop in CSS_KNOWN_PROPS
+
+
+def css_decl_is_applied(prop: str, value: str) -> bool:
+    token = CSS_IMPORTANT.sub("", value).strip().split()[0] if value.strip() else ""
+    return css_property_applies(prop) and css_decl_value_applies(prop, token)
+
+
 def is_html_type7_line(raw: str) -> bool:
     """True when the line is a complete HTML start or end tag (CommonMark type 7)."""
     match = HTML_TYPE7_TAG.match(raw)
@@ -1073,8 +1141,9 @@ def iter_css_declarations(style: str):
 
 
 def has_css_declaration(style: str) -> bool:
-    for _ in iter_css_declarations(style):
-        return True
+    for prop, value in iter_css_declarations(style):
+        if css_decl_is_applied(prop, value):
+            return True
     return False
 
 
@@ -1110,25 +1179,51 @@ def winning_style_raw(style: str) -> dict[str, str]:
     return {prop: raw for prop, (raw, _imp) in winning.items()}
 
 
-def _margin_horizontal_auto(vals: dict[str, str]) -> bool:
-    if vals.get("margin-left") == "auto" and vals.get("margin-right") == "auto":
-        return True
-    parts = vals.get("margin", "").split()
+def _expand_box_sides(parts: list[str]) -> tuple[str, str, str, str] | None:
     if len(parts) == 1:
-        return parts[0] == "auto"
+        return parts[0], parts[0], parts[0], parts[0]
     if len(parts) == 2:
-        return parts[1] == "auto"
+        return parts[0], parts[1], parts[0], parts[1]
     if len(parts) == 3:
-        return parts[1] == "auto"
-    if len(parts) == 4:
-        return parts[1] == "auto" and parts[3] == "auto"
-    return False
+        return parts[0], parts[1], parts[2], parts[1]
+    if len(parts) >= 4:
+        return parts[0], parts[1], parts[2], parts[3]
+    return None
+
+
+def winning_margin_sides(style: str) -> dict[str, str]:
+    """Winning margin-top/right/bottom/left after shorthand vs longhand cascade."""
+    winning: dict[str, tuple[str, bool]] = {}
+    for prop, value in iter_css_declarations(style):
+        important = bool(CSS_IMPORTANT.search(value))
+        raw = CSS_IMPORTANT.sub("", value).strip().lower()
+        if prop == "margin":
+            expanded = _expand_box_sides(raw.split())
+            if not expanded:
+                continue
+            for side, val in zip(("top", "right", "bottom", "left"), expanded):
+                prev = winning.get(side)
+                if prev is not None and prev[1] and not important:
+                    continue
+                winning[side] = (val, important)
+        elif prop in {"margin-top", "margin-right", "margin-bottom", "margin-left"}:
+            side = prop.split("-", 1)[1]
+            prev = winning.get(side)
+            if prev is not None and prev[1] and not important:
+                continue
+            winning[side] = (raw, important)
+    return {side: val for side, (val, _imp) in winning.items()}
+
+
+def _margin_horizontal_auto(style: str) -> bool:
+    sides = winning_margin_sides(style)
+    return sides.get("left") == "auto" and sides.get("right") == "auto"
 
 
 def has_root_layout(style: str) -> bool:
     vals = winning_style_raw(style)
     mw = re.sub(r"\s+", "", vals.get("max-width", ""))
-    return mw == "677px" and _margin_horizontal_auto(vals)
+    return mw == "677px" and _margin_horizontal_auto(style)
 
 
 def has_responsive_image_style(style: str) -> bool:
@@ -1136,7 +1231,7 @@ def has_responsive_image_style(style: str) -> bool:
     mw = re.sub(r"\s+", "", vals.get("max-width", ""))
     height = re.sub(r"\s+", "", vals.get("height", ""))
     display = (vals.get("display", "").split() or [""])[0]
-    return mw == "100%" and height == "auto" and display == "block" and _margin_horizontal_auto(vals)
+    return mw == "100%" and height == "auto" and display == "block" and _margin_horizontal_auto(style)
 
 
 _CSS_ABS_PX = {
@@ -1163,15 +1258,14 @@ def css_length_px(value: str) -> float | None:
 
 
 def font_size_limit_hits(style: str) -> list[str]:
-    hits: list[str] = []
-    for prop, value in iter_css_declarations(style):
-        if prop != "font-size":
-            continue
-        token = CSS_IMPORTANT.sub("", value).strip().split()[0] if value.strip() else ""
-        px = css_length_px(token)
-        if px is None or px > 24:
-            hits.append(token)
-    return hits
+    raw = winning_style_raw(style).get("font-size", "")
+    if not raw:
+        return []
+    token = raw.split()[0]
+    px = css_length_px(token)
+    if px is None or px > 24:
+        return [token]
+    return []
 
 
 def winning_style_tokens(style: str) -> dict[str, str]:
@@ -1461,24 +1555,107 @@ def media_applies_to_screen(media: str | None) -> bool:
     text = media.strip()
     if not text:
         return True
-    for query in _split_media_list(text):
-        q = query.strip().lower()
+    return any(_media_query_applies(query) for query in _split_media_list(text) if query.strip())
+
+
+def _media_query_applies(query: str) -> bool:
+    q = query.strip().lower()
+    if not q:
+        return False
+    negate = False
+    if q.startswith("only "):
+        q = q[5:].lstrip()
+    elif q.startswith("not "):
+        negate = True
+        q = q[4:].lstrip()
+    match = re.match(r"^([a-z]+)\b(.*)$", q)
+    if match and match.group(1) in _MEDIA_TYPES:
+        mtype = match.group(1)
+        rest = match.group(2).strip()
+        matches = mtype in {"all", "screen"} and _media_features_apply(rest)
+    else:
+        matches = _media_features_apply(q)
+    return (not matches) if negate else matches
+
+
+def _media_features_apply(text: str) -> bool:
+    q = text.strip()
+    if not q:
+        return True
+    if q.lower().startswith("and") and (len(q) == 3 or not q[3].isalnum()):
+        q = q[3:].strip()
         if not q:
-            continue
-        negate = False
-        if q.startswith("only "):
-            q = q[5:].lstrip()
-        elif q.startswith("not "):
-            negate = True
-            q = q[4:].lstrip()
-        match = re.match(r"^([a-z]+)", q)
-        mtype = match.group(1) if match and match.group(1) in _MEDIA_TYPES else "all"
-        matches = mtype in {"all", "screen"}
-        if negate:
-            matches = not matches
-        if matches:
-            return True
-    return False
+            return False
+    or_parts = _split_supports_keyword(q, "or")
+    if len(or_parts) > 1:
+        return any(_media_features_apply(part) for part in or_parts)
+    and_parts = _split_supports_keyword(q, "and")
+    if len(and_parts) > 1:
+        return all(_media_features_apply(part) for part in and_parts)
+    lower = q.lower()
+    if lower.startswith("not") and (len(q) == 3 or not q[3].isalnum()):
+        return not _media_features_apply(q[3:].strip())
+    inner = _unwrap_supports_parens(q)
+    if inner != q:
+        return _media_features_apply(inner)
+    match = re.match(r"^([a-z-]+)\s*(?::\s*(.+))?$", inner.strip(), re.I)
+    if not match:
+        return False
+    return _media_feature_applies(match.group(1).lower(), (match.group(2) or "").strip())
+
+
+def _media_feature_applies(name: str, value: str) -> bool:
+    if name not in _MEDIA_FEATURES:
+        return False
+    vw, vh = _PREVIEW_VIEWPORT_PX
+    token = value.split()[0].lower() if value else ""
+    if name in {"width", "min-width", "max-width", "device-width", "min-device-width", "max-device-width"}:
+        if not token:
+            return name in {"width", "device-width"}
+        px = css_length_px(token)
+        if px is None:
+            return False
+        if name.startswith("min"):
+            return vw >= px
+        if name.startswith("max"):
+            return vw <= px
+        return abs(vw - px) < 0.5
+    if name in {"height", "min-height", "max-height", "device-height", "min-device-height", "max-device-height"}:
+        if not token:
+            return name in {"height", "device-height"}
+        px = css_length_px(token)
+        if px is None:
+            return False
+        if name.startswith("min"):
+            return vh >= px
+        if name.startswith("max"):
+            return vh <= px
+        return abs(vh - px) < 0.5
+    if name == "orientation":
+        return token in {"", "landscape"}
+    if name in {"hover", "any-hover"}:
+        return token in {"", "hover"}
+    if name in {"pointer", "any-pointer"}:
+        return token in {"", "fine"}
+    if name == "prefers-color-scheme":
+        return token in {"", "light"}
+    if name == "prefers-reduced-motion":
+        return token in {"", "no-preference"}
+    if name == "prefers-contrast":
+        return token in {"", "no-preference"}
+    if name == "forced-colors":
+        return token in {"", "none"}
+    if name == "grid":
+        return token in {"", "0"}
+    if name == "color":
+        return True if not token else token.isdigit() and int(token) <= 8
+    if name == "update":
+        return token in {"", "fast"}
+    if name == "scripting":
+        return token in {"", "enabled"}
+    if name == "display-mode":
+        return token in {"", "browser"}
+    return not token
 
 
 def _split_supports_keyword(text: str, keyword: str) -> list[str]:
@@ -1666,16 +1843,44 @@ def _css_consume_block(text: str, i: int) -> tuple[str, int]:
     return text[start:i], n
 
 
+def _new_layer_state() -> dict:
+    return {"next": 0, "names": {}}
+
+
+def _register_layer_names(rest: str, state: dict) -> None:
+    for part in rest.split(","):
+        name = part.strip().lower()
+        if not name or name in state["names"]:
+            continue
+        state["names"][name] = state["next"]
+        state["next"] += 1
+
+
+def _layer_index_for(rest: str, state: dict) -> int:
+    text = (rest or "").strip()
+    if not text:
+        idx = state["next"]
+        state["next"] += 1
+        return idx
+    first = text.split(",", 1)[0].strip().lower()
+    _register_layer_names(text, state)
+    if first in state["names"]:
+        return state["names"][first]
+    idx = state["next"]
+    state["next"] += 1
+    return idx
+
+
 def iter_css_style_rules(
     css: str,
     *,
     active: bool = True,
     layer_index: int | None = None,
-    layer_seq: list[int] | None = None,
+    layer_state: dict | None = None,
 ):
     """Yield (selector, body, layer_index) for style rules in currently active media."""
     text = strip_css_comments(css or "")
-    seq = layer_seq if layer_seq is not None else [0]
+    state = layer_state if layer_state is not None else _new_layer_state()
     i = 0
     n = len(text)
     while i < n:
@@ -1711,13 +1916,12 @@ def iter_css_style_rules(
                         query = prelude[match.end() :].strip() if match else ""
                         inner_active = active and media_applies_to_screen(query)
                         yield from iter_css_style_rules(
-                            body, active=inner_active, layer_index=layer_index, layer_seq=seq
+                            body, active=inner_active, layer_index=layer_index, layer_state=state
                         )
                     elif name == "layer":
-                        idx = seq[0]
-                        seq[0] += 1
+                        idx = _layer_index_for(prelude[match.end() :], state)
                         yield from iter_css_style_rules(
-                            body, active=active, layer_index=idx, layer_seq=seq
+                            body, active=active, layer_index=idx, layer_state=state
                         )
                     elif name == "supports":
                         query = prelude[match.end() :].strip() if match else ""
@@ -1725,17 +1929,21 @@ def iter_css_style_rules(
                             body,
                             active=active and supports_applies(query),
                             layer_index=layer_index,
-                            layer_seq=seq,
+                            layer_state=state,
                         )
                     elif name in {"scope", "container"}:
                         yield from iter_css_style_rules(
-                            body, active=False, layer_index=layer_index, layer_seq=seq
+                            body, active=False, layer_index=layer_index, layer_state=state
                         )
                 elif active and prelude:
                     yield prelude, body, layer_index
                 break
             if ch == ";":
                 found = True
+                stmt = text[start:i].strip()
+                at = re.match(r"@([A-Za-z-]+)", stmt)
+                if at and at.group(1).lower() == "layer":
+                    _register_layer_names(stmt[at.end() :], state)
                 i += 1
                 break
             i += 1
@@ -2216,7 +2424,7 @@ def iter_compound_pseudos(compound: str):
         i += 1
 
 
-def _selector_list_match_state(arg: str, tag: str, attrs) -> bool | None:
+def _selector_list_match_state(arg: str, tag: str, attrs, *, ctx: dict | None = None) -> bool | None:
     """True/False when every selector is a simple compound; None if unevaluable."""
     saw_true = False
     parts = split_selector_list(arg)
@@ -2226,7 +2434,7 @@ def _selector_list_match_state(arg: str, tag: str, attrs) -> bool | None:
         chain = split_selector_chain(sel)
         if len(chain) != 1 or chain[0][0]:
             return None
-        state = css_compound_match_state(chain[0][1], tag, attrs)
+        state = css_compound_match_state(chain[0][1], tag, attrs, ctx=ctx)
         if state is None:
             return None
         if state:
@@ -2263,8 +2471,72 @@ def css_attr_pseudo_matches(name: str, tag: str, attrs) -> bool | None:
     return None
 
 
-def css_pseudos_state(compound: str, tag: str, attrs) -> bool | None:
+def _nth_matches(expr: str | None, index: int) -> bool | None:
+    if not expr:
+        return None
+    text = re.sub(r"\s+", "", expr.lower())
+    if text == "odd":
+        return index % 2 == 1
+    if text == "even":
+        return index % 2 == 0
+    m = re.fullmatch(r"([+-]?)(\d*)n([+-]\d+)?", text)
+    if m:
+        sign, step, offset = m.group(1), m.group(2), m.group(3)
+        if step == "":
+            a = -1 if sign == "-" else 1
+        else:
+            a = int(f"{sign}{step}")
+        b = int(offset) if offset else 0
+        if a == 0:
+            return index == b
+        n, rem = divmod(index - b, a)
+        return rem == 0 and n >= 0
+    if re.fullmatch(r"[+-]?\d+", text):
+        return index == int(text)
+    return None
+
+
+def _structural_pseudo_matches(name: str, arg: str | None, tag: str, ctx: dict) -> bool | None:
+    prev = ctx.get("prev_siblings") or []
+    empty = ctx.get("empty")
+    is_last = ctx.get("is_last")
+    ancestors = ctx.get("ancestors") or []
+    if name == "empty":
+        if empty is None:
+            return None
+        return bool(empty)
+    if name == "root":
+        return not ancestors
+    if name == "first-child":
+        return not prev
+    if name == "last-child":
+        if is_last is None:
+            return None
+        return bool(is_last)
+    if name == "only-child":
+        if is_last is None:
+            return None
+        return (not prev) and bool(is_last)
+    if name == "nth-child":
+        return _nth_matches(arg, len(prev) + 1)
+    if name == "nth-last-child":
+        return None
+    if name == "first-of-type":
+        return not any(item[0] == tag for item in prev)
+    if name == "last-of-type":
+        return None
+    if name == "only-of-type":
+        return None
+    if name == "nth-of-type":
+        return _nth_matches(arg, 1 + sum(1 for item in prev if item[0] == tag))
+    if name == "nth-last-of-type":
+        return None
+    return None
+
+
+def css_pseudos_state(compound: str, tag: str, attrs, *, ctx: dict | None = None) -> bool | None:
     """True if all pseudos are satisfied, False if not, None if unevaluable."""
+    ctx = ctx or {}
     for name, arg, is_element, malformed in iter_compound_pseudos(compound):
         if malformed or is_element:
             return None
@@ -2276,7 +2548,7 @@ def css_pseudos_state(compound: str, tag: str, attrs) -> bool | None:
         if name in {"not", "is", "where"}:
             if arg is None:
                 return None
-            inner = _selector_list_match_state(arg, tag, attrs)
+            inner = _selector_list_match_state(arg, tag, attrs, ctx=ctx)
             if inner is None:
                 return None
             if name == "not":
@@ -2285,6 +2557,11 @@ def css_pseudos_state(compound: str, tag: str, attrs) -> bool | None:
             elif not inner:
                 return False
             continue
+        struct = _structural_pseudo_matches(name, arg, tag, ctx)
+        if struct is True:
+            continue
+        if struct is False:
+            return False
         return None
     return True
 
@@ -2361,8 +2638,8 @@ def _css_subject_matches(subject: str, tag: str, attrs) -> bool:
     return True
 
 
-def css_compound_match_state(compound: str, tag: str, attrs) -> bool | None:
-    pseudo = css_pseudos_state(compound, tag, attrs)
+def css_compound_match_state(compound: str, tag: str, attrs, *, ctx: dict | None = None) -> bool | None:
+    pseudo = css_pseudos_state(compound, tag, attrs, ctx=ctx)
     if pseudo is not True:
         return pseudo
     subject = strip_css_pseudos(compound)
@@ -2371,13 +2648,13 @@ def css_compound_match_state(compound: str, tag: str, attrs) -> bool | None:
     if subject:
         return True if _css_subject_matches(subject, tag, attrs) else False
     names = [name for name, _arg, _el, _bad in iter_compound_pseudos(compound)]
-    if any(name in {"not", "is", "where"} for name in names):
+    if names:
         return True
     return False
 
 
-def css_compound_matches(compound: str, tag: str, attrs) -> bool:
-    state = css_compound_match_state(compound, tag, attrs)
+def css_compound_matches(compound: str, tag: str, attrs, *, ctx: dict | None = None) -> bool:
+    state = css_compound_match_state(compound, tag, attrs, ctx=ctx)
     return state is True
 
 
@@ -2388,10 +2665,17 @@ def _css_match_chain(
     attrs,
     ancestors: list[tuple[str, object, list]],
     prev_siblings: list[tuple[str, object]],
+    ctx: dict | None = None,
 ) -> bool:
     if not compounds:
         return False
-    if not css_compound_matches(compounds[-1], tag, attrs):
+    subject_ctx = ctx or {
+        "prev_siblings": prev_siblings,
+        "ancestors": ancestors,
+        "empty": None,
+        "is_last": None,
+    }
+    if not css_compound_matches(compounds[-1], tag, attrs, ctx=subject_ctx):
         return False
     if len(compounds) == 1:
         return True
@@ -2429,6 +2713,9 @@ def css_selector_matches(
     attrs,
     ancestors: list[tuple[str, object, list]] | None = None,
     prev_siblings: list[tuple[str, object]] | None = None,
+    *,
+    empty: bool | None = None,
+    is_last: bool | None = None,
 ) -> bool:
     """Match a simple CSS selector against the current element and its ancestors."""
     chain = split_selector_chain(selector)
@@ -2436,14 +2723,15 @@ def css_selector_matches(
         return False
     compounds = [part[1] for part in chain]
     combs = [part[0] for part in chain[1:]]
-    return _css_match_chain(
-        compounds,
-        combs,
-        tag,
-        attrs,
-        list(ancestors or []),
-        list(prev_siblings or []),
-    )
+    ancs = list(ancestors or [])
+    prev = list(prev_siblings or [])
+    ctx = {
+        "prev_siblings": prev,
+        "ancestors": ancs,
+        "empty": empty,
+        "is_last": is_last,
+    }
+    return _css_match_chain(compounds, combs, tag, attrs, ancs, prev, ctx)
 
 
 class PreviewMarkerCollector(HTMLParser):
@@ -2460,6 +2748,7 @@ class PreviewMarkerCollector(HTMLParser):
         self.sheet_hides = sheet_hides or []
         self.dom_open: list[tuple[str, object, list]] = []
         self.level_children: list[list[tuple[str, object]]] = [[]]
+        self.open_meta: list[dict] = []
 
     def _flush_text(self) -> None:
         if self.text_buf:
@@ -2536,12 +2825,23 @@ class PreviewMarkerCollector(HTMLParser):
                 return
             self.handle_endtag(top)
 
-    def _sheet_hide(self, tag: str, attrs) -> tuple[bool, bool, bool, bool, str | None, bool]:
-        ancestors = list(self.dom_open)
-        prev_siblings = list(self.level_children[-1])
+    def _sheet_hide(
+        self,
+        tag: str,
+        attrs,
+        *,
+        empty: bool | None = None,
+        is_last: bool | None = None,
+        ancestors: list | None = None,
+        prev_siblings: list | None = None,
+    ) -> tuple[bool, bool, bool, bool, str | None, bool]:
+        ancestors = list(self.dom_open) if ancestors is None else ancestors
+        prev_siblings = list(self.level_children[-1]) if prev_siblings is None else prev_siblings
         winning: dict[str, tuple[str, bool, int | None, tuple[int, int, int], int]] = {}
         for order, (selector, decls, layer_index) in enumerate(self.sheet_hides):
-            if not css_selector_matches(selector, tag, attrs, ancestors, prev_siblings):
+            if not css_selector_matches(
+                selector, tag, attrs, ancestors, prev_siblings, empty=empty, is_last=is_last
+            ):
                 continue
             spec = css_specificity(selector)
             for prop, (token, imp) in decls.items():
@@ -2587,8 +2887,9 @@ class PreviewMarkerCollector(HTMLParser):
                 return True
             return hides(token)
 
+        empty_now = True if ltag in VOID_TAGS else None
         sheet_display_none, sheet_display_imp, sheet_opacity_zero, sheet_opacity_imp, sheet_vis, sheet_vis_imp = (
-            self._sheet_hide(ltag, attrs)
+            self._sheet_hide(ltag, attrs, empty=empty_now)
         )
         display_none = cascade_hide(sheet_display_none, sheet_display_imp, "display", lambda t: t == "none")
         opacity_zero = cascade_hide(sheet_opacity_zero, sheet_opacity_imp, "opacity", _opacity_is_zero)
@@ -2643,11 +2944,25 @@ class PreviewMarkerCollector(HTMLParser):
         elif not vis_hidden and ltag in PREVIEW_FALLBACK_TAGS:
             self.skip_depth += 1
             fallback = True
-        self.stack.append((ltag, skip, hard, opened_closed_details, opened_summary, fallback))
+        if self.open_meta:
+            self.open_meta[-1]["had_element"] = True
+        chunk_at = len(self.chunks)
+        parent_anc = list(self.dom_open)
         prev = list(self.level_children[-1])
+        self.stack.append((ltag, skip, hard, opened_closed_details, opened_summary, fallback))
         self.level_children[-1].append((ltag, attrs))
         self.dom_open.append((ltag, attrs, prev))
         self.level_children.append([])
+        self.open_meta.append({
+            "chunk_at": chunk_at,
+            "had_text": False,
+            "had_element": False,
+            "tag": ltag,
+            "attrs": attrs,
+            "skip": skip,
+            "ancestors": parent_anc,
+            "prev": prev,
+        })
         if hard or vis_hidden:
             return
         for name, value in attrs:
@@ -2664,6 +2979,19 @@ class PreviewMarkerCollector(HTMLParser):
                 if ltag in PREVIEW_BLOCK_BREAK and self.skip_depth == 0:
                     self._flush_text()
                 for _, _was_skip, was_hard, opened_closed_details, opened_summary, was_fallback in reversed(self.stack[i:]):
+                    meta = self.open_meta.pop() if self.open_meta else None
+                    if meta and not meta["skip"]:
+                        empty = not meta["had_text"] and not meta["had_element"]
+                        if empty:
+                            disp_none, _, opac0, _, vis, _ = self._sheet_hide(
+                                meta["tag"],
+                                meta["attrs"],
+                                empty=True,
+                                ancestors=meta["ancestors"],
+                                prev_siblings=meta["prev"],
+                            )
+                            if disp_none or opac0 or vis in {"hidden", "collapse"}:
+                                self.chunks = self.chunks[: meta["chunk_at"]]
                     if opened_summary and self.details_stack:
                         self.details_stack[-1]["in_summary"] = False
                     if opened_closed_details and self.details_stack:
@@ -2686,6 +3014,8 @@ class PreviewMarkerCollector(HTMLParser):
             self.handle_endtag("p")
 
     def handle_data(self, data: str) -> None:
+        if self.open_meta:
+            self.open_meta[-1]["had_text"] = True
         if self.skip_depth:
             return
         if self.vis_hidden_stack and self.vis_hidden_stack[-1]:

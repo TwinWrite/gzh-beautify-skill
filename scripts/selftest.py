@@ -333,6 +333,34 @@ def main() -> int:
         f"font-size:3e1px 应超过 24px: {sci_err}",
     )
 
+    overridden_size = styled_root(
+        '<p style="font-size:100px;font-size:16px;margin:0 0 16px;color:#1F2937;"><span leaf="">正文。</span></p>'
+    )
+    ov_err, _, _ = validate_article.validate(overridden_size)
+    assert_true(
+        not any("font-size" in e and "24" in e for e in ov_err),
+        f"被覆盖的 font-size:100px 不应超限: {ov_err}",
+    )
+
+    margin_override_root = (
+        '<section style="max-width:677px;margin-left:auto;margin-right:auto;margin:0 0;">'
+        f"{body_p('正文。')}</section>"
+    )
+    mor_err, _, _ = validate_article.validate(margin_override_root)
+    assert_true(
+        any("677" in e or "根 section" in e for e in mor_err),
+        f"后续 margin 简写应覆盖水平 auto: {mor_err}",
+    )
+
+    bogus_only_style = styled_root(
+        '<p style="made-up:bogus"><span leaf="">正文。</span></p>'
+    )
+    bos_err, _, _ = validate_article.validate(bogus_only_style)
+    assert_true(
+        any("style" in e.lower() or "缺少" in e for e in bos_err),
+        f"仅有无效声明的 p 应失败: {bos_err}",
+    )
+
     png_named = styled_root(
         '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
         '<img src="data:image/png;name=diagram.svg.png;base64,iVBORw0KGgo=" '
@@ -1495,6 +1523,55 @@ def main() -> int:
         (layer_imp_sheet / "preview.html").write_text(lis, encoding="utf-8")
         lis_err, _ = lint_theme.lint_theme(layer_imp_sheet, schema)
         assert_has(lis_err, "slot:footer", "important 下更早的 @layer 应赢")
+
+        layer_reopen_sheet = Path(tmp) / "layer-reopen-pack"
+        write_mini_theme(layer_reopen_sheet)
+        lrs = (layer_reopen_sheet / "preview.html").read_text(encoding="utf-8")
+        lrs = lrs.replace(
+            "</head>",
+            "<style>@layer a{#footer{display:none}} @layer b{#footer{display:block}} "
+            "@layer a{#footer{display:none}}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (layer_reopen_sheet / "preview.html").write_text(lrs, encoding="utf-8")
+        lrs_err, _ = lint_theme.lint_theme(layer_reopen_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in lrs_err),
+            f"重开的 @layer a 不应压过已声明的 b: {lrs_err}",
+        )
+
+        empty_pseudo_sheet = Path(tmp) / "empty-pseudo-pack"
+        write_mini_theme(empty_pseudo_sheet)
+        eps = (empty_pseudo_sheet / "preview.html").read_text(encoding="utf-8")
+        eps = eps.replace(
+            "</head>",
+            "<style>#footer:empty{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer" data-slot="slot:footer"></p>',
+        )
+        (empty_pseudo_sheet / "preview.html").write_text(eps, encoding="utf-8")
+        eps_err, _ = lint_theme.lint_theme(empty_pseudo_sheet, schema)
+        assert_has(eps_err, "slot:footer", ":empty 隐藏的页脚不应算覆盖")
+
+        unknown_media_sheet = Path(tmp) / "unknown-media-pack"
+        write_mini_theme(unknown_media_sheet)
+        ums = (unknown_media_sheet / "preview.html").read_text(encoding="utf-8")
+        ums = ums.replace(
+            "</head>",
+            "<style>@media screen and (unknown-feature:1){#footer{display:none}}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (unknown_media_sheet / "preview.html").write_text(ums, encoding="utf-8")
+        ums_err, _ = lint_theme.lint_theme(unknown_media_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in ums_err),
+            f"未知 media feature 不应应用内部规则: {ums_err}",
+        )
 
         supports_and_sheet = Path(tmp) / "supports-and-sheet-pack"
         write_mini_theme(supports_and_sheet)
