@@ -47,7 +47,8 @@ description: 生产可复用的微信公众号排版主题包，并用已生成�
 约束摘要（完整清单以 wechat-constraints 为准）：
 
 - 可粘贴 HTML：`section/p/span` + 全内联 style + 中文包在 `<span leaf="">` 里
-- 禁 `div/class/id/style标签/grid/position/CSS变量`
+- 禁 `div/class/id/style标签/grid/position/float/CSS变量`
+- 禁事件属性与 `javascript:` URL；代码块不要用 `<pre><code>`
 - 代码行用多个 `p`，不用 `white-space:pre`
 - 字号 ≤ 24px；根宽 677px
 - 强调用竖条/标签/下划线，四周虚线框只给待补素材

@@ -11,6 +11,7 @@
     "underline_css",
     "tags",
     "slots",
+    "signature_slots",
     "files"
   ],
   "additionalProperties": false,
@@ -164,6 +165,9 @@
     },
     "signature_slots": {
       "type": "array",
+      "minItems": 8,
+      "maxItems": 16,
+      "uniqueItems": true,
       "items": { "type": "string" }
     },
     "files": {
