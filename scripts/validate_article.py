@@ -500,14 +500,22 @@ def css_numeric_opacity(token: str) -> float | None:
 def css_decl_value_applies(prop: str, token: str) -> bool:
     if not token:
         return False
+    text = token.strip()
+    if prop in {"display", "visibility", "opacity"}:
+        low = text.lower()
+        if prop == "opacity" and low.startswith("calc("):
+            return low.endswith(")")
+        if len(text.split()) != 1:
+            return False
+        text = text.split()[0]
     if prop == "display":
-        return token in _CSS_DISPLAY_OK or token.startswith("-")
+        return text.lower() in _CSS_DISPLAY_OK or text.startswith("-")
     if prop == "visibility":
-        return token in _CSS_VIS_OK
+        return text.lower() in _CSS_VIS_OK
     if prop == "opacity":
-        if css_numeric_opacity(token) is not None:
+        if css_numeric_opacity(text) is not None:
             return True
-        low = token.lower()
+        low = text.lower()
         return low.startswith("calc(") and low.endswith(")")
     return True
 
@@ -521,8 +529,8 @@ def css_property_applies(prop: str) -> bool:
 
 
 def css_decl_is_applied(prop: str, value: str) -> bool:
-    token = CSS_IMPORTANT.sub("", value).strip().split()[0] if value.strip() else ""
-    return css_property_applies(prop) and css_decl_value_applies(prop, token)
+    raw = CSS_IMPORTANT.sub("", value).strip()
+    return css_property_applies(prop) and css_decl_value_applies(prop, raw)
 
 
 def has_css_declaration(style: str) -> bool:
@@ -651,8 +659,34 @@ def winning_style_raw(style: str) -> dict[str, str]:
             continue
         if prop == "font-size" and not css_font_size_value_ok(raw):
             continue
+        if prop in {"display", "opacity", "visibility"} and not css_decl_value_applies(prop, raw):
+            continue
         _cascade_put(winning, prop, raw, important)
     return {prop: raw for prop, (raw, _imp) in winning.items()}
+
+
+_MARGIN_KEYWORDS = frozenset({
+    "auto",
+    "inherit",
+    "initial",
+    "unset",
+    "revert",
+    "revert-layer",
+})
+
+
+def css_margin_side_ok(token: str) -> bool:
+    text = (token or "").strip().lower()
+    if not text:
+        return False
+    if text in _MARGIN_KEYWORDS:
+        return True
+    if text.startswith("calc(") and text.endswith(")"):
+        return True
+    return bool(re.fullmatch(
+        r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:[a-z%]+)?",
+        text,
+    ))
 
 
 def _expand_box_sides(parts: list[str]) -> tuple[str, str, str, str] | None:
@@ -676,12 +710,17 @@ def winning_margin_sides(style: str) -> dict[str, str]:
             _apply_all_reset(winning, important, raw.split()[0] if raw else "initial", extras=_MARGIN_ALL_INITIAL)
             continue
         if prop == "margin":
-            expanded = _expand_box_sides(raw.split())
+            parts = raw.split()
+            if not parts or not all(css_margin_side_ok(part) for part in parts):
+                continue
+            expanded = _expand_box_sides(parts)
             if not expanded:
                 continue
             for side, val in zip(("top", "right", "bottom", "left"), expanded):
                 _cascade_put(winning, side, val, important)
         elif prop in {"margin-top", "margin-right", "margin-bottom", "margin-left"}:
+            if not css_margin_side_ok(raw):
+                continue
             side = prop.split("-", 1)[1]
             _cascade_put(winning, side, raw, important)
     return {side: val for side, (val, _imp) in winning.items()}
@@ -732,6 +771,15 @@ def font_size_limit_hits(style: str) -> list[str]:
 def attr_values(attrs, name: str) -> list[str]:
     lname = name.lower()
     return [(value or "") for key, value in attrs if key.lower() == lname]
+
+
+def html_attrs_first(attrs) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for key, value in attrs:
+        lname = (key or "").lower()
+        if lname and lname not in out:
+            out[lname] = value or ""
+    return out
 
 
 def prose_without_urls(text: str) -> str:
@@ -857,7 +905,7 @@ class ArticleChecker(HTMLParser):
         self._clear_table_stack(ltag)
         if ltag in LEAF_BLOCK_TAGS:
             self._flush_prose()
-        ad = {k.lower(): v for k, v in attrs}
+        ad = html_attrs_first(attrs)
         styles = attr_values(attrs, "style")
         at_root = not self.stack
         if at_root:

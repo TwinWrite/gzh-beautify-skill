@@ -362,6 +362,16 @@ def main() -> int:
         f"五段 margin 简写应整条忽略: {fmr_err}",
     )
 
+    bogus_margin_root = (
+        '<section style="max-width:677px;margin:bogus auto;">'
+        f"{body_p('正文。')}</section>"
+    )
+    bmr_err, _, _ = validate_article.validate(bogus_margin_root)
+    assert_true(
+        any("677" in e or "根 section" in e for e in bmr_err),
+        f"含无效分量的 margin 简写应整条忽略: {bmr_err}",
+    )
+
     all_reset_root = (
         '<section style="max-width:677px;margin:0 auto;all:initial;">'
         f"{body_p('正文。')}</section>"
@@ -1873,6 +1883,104 @@ def main() -> int:
             not any("slot:footer" in e for e in eas_err),
             f"含 [] 的选择器列表应整条丢弃: {eas_err}",
         )
+
+        neg_opacity_sheet = Path(tmp) / "neg-opacity-pack"
+        write_mini_theme(neg_opacity_sheet)
+        nos = (neg_opacity_sheet / "preview.html").read_text(encoding="utf-8")
+        nos = nos.replace(
+            "<p>slot:footer</p>",
+            '<p id="footer" data-slot="slot:footer" style="opacity:-1">slot:footer</p>',
+        )
+        (neg_opacity_sheet / "preview.html").write_text(nos, encoding="utf-8")
+        nos_err, _ = lint_theme.lint_theme(neg_opacity_sheet, schema)
+        assert_has(nos_err, "slot:footer", "opacity:-1 应视为隐藏")
+
+        dup_id_sheet = Path(tmp) / "dup-id-first-pack"
+        write_mini_theme(dup_id_sheet)
+        dis = (dup_id_sheet / "preview.html").read_text(encoding="utf-8")
+        dis = dis.replace(
+            "</head>",
+            "<style>#preview-slot-footer{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="preview-slot-footer" id="other">slot:footer</p>',
+        )
+        (dup_id_sheet / "preview.html").write_text(dis, encoding="utf-8")
+        dis_err, _ = lint_theme.lint_theme(dup_id_sheet, schema)
+        assert_has(dis_err, "slot:footer", "重复 id 应保留第一个，#preview-slot-footer 应隐藏标记")
+
+        bogus_tail_sheet = Path(tmp) / "bogus-tail-display-pack"
+        write_mini_theme(bogus_tail_sheet)
+        bts = (bogus_tail_sheet / "preview.html").read_text(encoding="utf-8")
+        bts = bts.replace(
+            "</head>",
+            "<style>#footer{display:none}#footer{display:block bogus}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (bogus_tail_sheet / "preview.html").write_text(bts, encoding="utf-8")
+        bts_err, _ = lint_theme.lint_theme(bogus_tail_sheet, schema)
+        assert_has(bts_err, "slot:footer", "整条非法的 display:block bogus 不应覆盖 display:none")
+
+        implicit_tbody_sheet = Path(tmp) / "implicit-tbody-pack"
+        write_mini_theme(implicit_tbody_sheet)
+        its = (implicit_tbody_sheet / "preview.html").read_text(encoding="utf-8")
+        its = its.replace(
+            "</head>",
+            "<style>table > tbody #footer{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<table><tr><td id="footer">slot:footer</td></tr></table>',
+        )
+        (implicit_tbody_sheet / "preview.html").write_text(its, encoding="utf-8")
+        its_err, _ = lint_theme.lint_theme(implicit_tbody_sheet, schema)
+        assert_has(its_err, "slot:footer", "table 内隐式 tbody 应让 table > tbody #footer 命中")
+
+        sheet_imp_show_sheet = Path(tmp) / "sheet-important-show-pack"
+        write_mini_theme(sheet_imp_show_sheet)
+        sis = (sheet_imp_show_sheet / "preview.html").read_text(encoding="utf-8")
+        sis = sis.replace(
+            "</head>",
+            "<style>#footer{display:block!important}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer" style="display:none">slot:footer</p>',
+        )
+        (sheet_imp_show_sheet / "preview.html").write_text(sis, encoding="utf-8")
+        sis_err, _ = lint_theme.lint_theme(sheet_imp_show_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in sis_err),
+            f"样式表 display:block!important 应压过 inline display:none: {sis_err}",
+        )
+
+        escaped_attr_sheet = Path(tmp) / "escaped-attr-name-pack"
+        write_mini_theme(escaped_attr_sheet)
+        eas2 = (escaped_attr_sheet / "preview.html").read_text(encoding="utf-8")
+        eas2 = eas2.replace(
+            "</head>",
+            '<style>[data\\-slot="slot:footer"]{display:none}</style></head>',
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p data-slot="slot:footer">页脚</p>',
+        )
+        (escaped_attr_sheet / "preview.html").write_text(eas2, encoding="utf-8")
+        eas2_err, _ = lint_theme.lint_theme(escaped_attr_sheet, schema)
+        assert_has(eas2_err, "slot:footer", "属性选择器中的转义名应能隐藏标记")
+
+        has_pseudo_sheet = Path(tmp) / "has-pseudo-pack"
+        write_mini_theme(has_pseudo_sheet)
+        hps = (has_pseudo_sheet / "preview.html").read_text(encoding="utf-8")
+        hps = hps.replace(
+            "</head>",
+            "<style>p:has(span){display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="preview-slot-footer"><span>slot:footer</span></p>',
+        )
+        (has_pseudo_sheet / "preview.html").write_text(hps, encoding="utf-8")
+        hps_err, _ = lint_theme.lint_theme(has_pseudo_sheet, schema)
+        assert_has(hps_err, "slot:footer", "p:has(span) 隐藏的页脚不应算覆盖")
 
         footer_extra_preview = Path(tmp) / "footer-extra-preview-pack"
         write_mini_theme(footer_extra_preview)
