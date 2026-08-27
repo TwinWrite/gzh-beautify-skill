@@ -236,6 +236,14 @@ def main() -> int:
     _, url_then_warn, _ = validate_article.validate(url_then_prose)
     assert_true(any("半角" in w for w in url_then_warn), f"URL 后的中文正文半角冒号应警告: {url_then_warn}")
 
+    url_comma_cjk = styled_root(
+        '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
+        '<a href="https://example.com"><span leaf="">https://example.com</span></a>'
+        '<span leaf="">,然后继续。</span></p>'
+    )
+    _, uc_warn, _ = validate_article.validate(url_comma_cjk)
+    assert_true(any("半角" in w for w in uc_warn), f"链接外的半角逗号应警告: {uc_warn}")
+
     numeric_prose = styled_root(body_p("会议 12:30 开始，约 1,234 人，比例 16:9。"))
     _, num_warn, _ = validate_article.validate(numeric_prose)
     assert_true(not any("半角" in w for w in num_warn), f"数字字面量中的 ,/: 不应报半角标点: {num_warn}")
@@ -1119,6 +1127,37 @@ def main() -> int:
         qas_err, _ = lint_theme.lint_theme(quoted_attr_sheet, schema)
         assert_has(qas_err, "slot:footer", "带空格的属性选择器应能隐藏预览标记")
 
+        comma_attr_sheet = Path(tmp) / "comma-attr-sheet-pack"
+        write_mini_theme(comma_attr_sheet)
+        cas = (comma_attr_sheet / "preview.html").read_text(encoding="utf-8")
+        cas = cas.replace(
+            "</head>",
+            '<style>[data-label="a,b"]{display:none}</style></head>',
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p data-label="a,b">slot:footer</p>',
+        )
+        (comma_attr_sheet / "preview.html").write_text(cas, encoding="utf-8")
+        cas_err, _ = lint_theme.lint_theme(comma_attr_sheet, schema)
+        assert_has(cas_err, "slot:footer", "引号内逗号的属性选择器应能隐藏预览标记")
+
+        hover_sheet = Path(tmp) / "hover-sheet-pack"
+        write_mini_theme(hover_sheet)
+        hvs = (hover_sheet / "preview.html").read_text(encoding="utf-8")
+        hvs = hvs.replace(
+            "</head>",
+            "<style>#footer:hover{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (hover_sheet / "preview.html").write_text(hvs, encoding="utf-8")
+        hvs_err, _ = lint_theme.lint_theme(hover_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in hvs_err),
+            f":hover 规则在默认预览下不应隐藏标记: {hvs_err}",
+        )
+
         prefix_attr_sheet = Path(tmp) / "prefix-attr-sheet-pack"
         write_mini_theme(prefix_attr_sheet)
         pas = (prefix_attr_sheet / "preview.html").read_text(encoding="utf-8")
@@ -1203,6 +1242,16 @@ def main() -> int:
         )
         sbp_err, _ = lint_theme.lint_theme(stray_br_preview, schema)
         assert_has(sbp_err, "slot:footer", "游离 </br> 应打断预览标记拼接")
+
+        stray_p_preview = Path(tmp) / "stray-p-preview-pack"
+        write_mini_theme(stray_p_preview)
+        spp = (stray_p_preview / "preview.html").read_text(encoding="utf-8")
+        (stray_p_preview / "preview.html").write_text(
+            spp.replace("<p>slot:footer</p>", "<span>slot:</p>footer</span>"),
+            encoding="utf-8",
+        )
+        spp_err, _ = lint_theme.lint_theme(stray_p_preview, schema)
+        assert_has(spp_err, "slot:footer", "游离 </p> 应打断预览标记拼接")
 
         popover_preview = Path(tmp) / "popover-preview-pack"
         write_mini_theme(popover_preview)
@@ -1463,6 +1512,17 @@ def main() -> int:
         assert_true(
             any("结构模型" in e for e in sth_err),
             f"_ _ _ 主题分隔后 type-7 应吞掉后续标题: {sth_err}",
+        )
+
+        tab_indent_code = Path(tmp) / "tab-indent-code-pack"
+        write_mini_theme(tab_indent_code)
+        tic = (tab_indent_code / "THEME.md").read_text(encoding="utf-8")
+        tic = tic.replace("## 结构模型\n", "\tcode\n<x>\n## 结构模型\n")
+        (tab_indent_code / "THEME.md").write_text(tic, encoding="utf-8")
+        tic_err, _ = lint_theme.lint_theme(tab_indent_code, schema)
+        assert_true(
+            any("结构模型" in e for e in tic_err),
+            f"tab 缩进代码后 type-7 应吞掉后续标题: {tic_err}",
         )
 
         type1_selfclose = Path(tmp) / "type1-selfclose-pack"

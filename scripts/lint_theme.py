@@ -531,9 +531,26 @@ MD_THEMATIC = re.compile(r"^ {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*
 SETEXT_UNDERLINE = re.compile(r"^ {0,3}(?:=+|-+)\s*$")
 
 
+def indent_columns(raw: str) -> int:
+    """CommonMark indent width: spaces count 1, tabs advance to the next multiple of 4."""
+    cols = 0
+    for ch in raw:
+        if ch == " ":
+            cols += 1
+        elif ch == "\t":
+            cols += 4 - (cols % 4)
+        else:
+            break
+    return cols
+
+
+def is_indented_code_line(raw: str) -> bool:
+    return indent_columns(raw) >= 4
+
+
 def is_paragraph_line(raw: str) -> bool:
     """True when a Markdown line continues or starts a paragraph (not another block)."""
-    if not raw.strip() or raw.startswith("    "):
+    if not raw.strip() or is_indented_code_line(raw):
         return False
     if ATX_HEADING.match(raw) or MD_LIST.match(raw) or MD_QUOTE.match(raw) or MD_THEMATIC.match(raw):
         return False
@@ -589,7 +606,7 @@ def recipe_body_usable(body: str) -> bool:
 def recipe_entry_ids(section: str) -> set[str]:
     found: set[str] = set()
     for raw in section.splitlines():
-        if raw.startswith("    ") or raw.startswith("\t"):
+        if is_indented_code_line(raw):
             continue
         line = raw.strip()
         listed = RECIPE_LIST.match(line)
@@ -961,6 +978,47 @@ def has_preview_marker(haystack: str, ident: str, *prefixes: str) -> bool:
     return False
 
 
+def split_selector_list(text: str) -> list[str]:
+    """Split a selector list on commas that are outside quotes, [], and ()."""
+    parts: list[str] = []
+    depth_brack = 0
+    depth_paren = 0
+    quote = None
+    start = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+        elif ch == "[":
+            depth_brack += 1
+        elif ch == "]" and depth_brack:
+            depth_brack -= 1
+        elif ch == "(":
+            depth_paren += 1
+        elif ch == ")" and depth_paren:
+            depth_paren -= 1
+        elif ch == "," and depth_brack == 0 and depth_paren == 0:
+            piece = text[start:i].strip()
+            if piece:
+                parts.append(piece)
+            start = i + 1
+        i += 1
+    piece = text[start:].strip()
+    if piece:
+        parts.append(piece)
+    return parts
+
+
 def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[str, bool]]]]:
     """Selectors from <style> with display/opacity/visibility declarations (hiding or not)."""
     rules: list[tuple[str, dict[str, tuple[str, bool]]]] = []
@@ -974,10 +1032,8 @@ def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[
                     tracked[prop] = decls[prop]
             if not tracked:
                 continue
-            for selector in match.group(1).split(","):
-                sel = selector.strip()
-                if sel:
-                    rules.append((sel, tracked))
+            for selector in split_selector_list(match.group(1)):
+                rules.append((selector, tracked))
     return rules
 
 
@@ -1156,7 +1212,85 @@ def css_attr_selector_matches(inner: str, ad: dict[str, str]) -> bool:
     return False
 
 
+CSS_STATE_PSEUDOS = frozenset({
+    "hover",
+    "active",
+    "focus",
+    "focus-visible",
+    "focus-within",
+    "visited",
+    "target",
+    "fullscreen",
+    "modal",
+    "popover-open",
+    "checked",
+    "indeterminate",
+    "default",
+    "disabled",
+    "enabled",
+    "required",
+    "optional",
+    "read-only",
+    "read-write",
+    "placeholder-shown",
+    "valid",
+    "invalid",
+    "user-invalid",
+    "in-range",
+    "out-of-range",
+    "dir",
+    "lang",
+    "playing",
+    "paused",
+    "autofill",
+})
+
+
+def css_static_pseudos_ok(compound: str) -> bool:
+    """False when the compound has a state pseudo-class the static preview cannot satisfy."""
+    depth_brack = 0
+    quote = None
+    i = 0
+    n = len(compound)
+    while i < n:
+        ch = compound[i]
+        if quote:
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+            i += 1
+            continue
+        if ch == "[":
+            depth_brack += 1
+        elif ch == "]" and depth_brack:
+            depth_brack -= 1
+        elif ch == ":" and depth_brack == 0:
+            i += 1
+            if i < n and compound[i] == ":":
+                i += 1
+                while i < n and (compound[i].isalnum() or compound[i] == "-"):
+                    i += 1
+                continue
+            start = i
+            while i < n and (compound[i].isalnum() or compound[i] == "-"):
+                i += 1
+            name = compound[start:i].lower()
+            if name in CSS_STATE_PSEUDOS:
+                return False
+            continue
+        i += 1
+    return True
+
+
 def css_compound_matches(compound: str, tag: str, attrs) -> bool:
+    if not css_static_pseudos_ok(compound):
+        return False
     subject = strip_css_pseudos(compound)
     if not subject:
         return False
@@ -1509,6 +1643,10 @@ class PreviewMarkerCollector(HTMLParser):
                 return
         if ltag == "br":
             self.handle_starttag("br", [])
+            return
+        if ltag == "p":
+            self.handle_starttag("p", [])
+            self.handle_endtag("p")
 
     def handle_data(self, data: str) -> None:
         if self.skip_depth:

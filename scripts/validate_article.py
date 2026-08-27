@@ -13,8 +13,8 @@ CJK = re.compile(r"[一-鿿㐀-䶿]")
 HALF_PUNCT = re.compile(r"[,;!?:]|[\"']")
 NUMERIC_SEP = re.compile(r"(?<=\d)[,:](?=\d)")
 URL_OR_EMAIL = re.compile(
-    r"(?i)(?:https?://|ftp://|mailto:)[^\s<>\"'，。！？：；、]+|"
-    r"www\.[^\s<>\"'，。！？：；、]+|"
+    r"(?i)(?:https?://|ftp://|mailto:)[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+|"
+    r"www\.[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+|"
     r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
 )
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
