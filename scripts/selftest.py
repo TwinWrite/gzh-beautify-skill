@@ -1263,6 +1263,92 @@ def main() -> int:
             f"后出现的 display:block 应覆盖先前的 display:none: {lvs_err}",
         )
 
+        not_spec_sheet = Path(tmp) / "not-spec-sheet-pack"
+        write_mini_theme(not_spec_sheet)
+        nss = (not_spec_sheet / "preview.html").read_text(encoding="utf-8")
+        nss = nss.replace(
+            "</head>",
+            "<style>#footer:not(.x){display:none}#footer{display:block}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (not_spec_sheet / "preview.html").write_text(nss, encoding="utf-8")
+        nss_err, _ = lint_theme.lint_theme(not_spec_sheet, schema)
+        assert_has(nss_err, "slot:footer", ":not() 更高特异性的 display:none 不应被后来的 #footer 覆盖")
+
+        comment_style_sheet = Path(tmp) / "comment-style-sheet-pack"
+        write_mini_theme(comment_style_sheet)
+        cssh = (comment_style_sheet / "preview.html").read_text(encoding="utf-8")
+        cssh = cssh.replace(
+            "</head>",
+            "<!-- <style>#footer{display:none}</style> --></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (comment_style_sheet / "preview.html").write_text(cssh, encoding="utf-8")
+        cssh_err, _ = lint_theme.lint_theme(comment_style_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in cssh_err),
+            f"注释里的 style 不应当作活动样式表: {cssh_err}",
+        )
+
+        escaped_id_sheet = Path(tmp) / "escaped-id-sheet-pack"
+        write_mini_theme(escaped_id_sheet)
+        eis = (escaped_id_sheet / "preview.html").read_text(encoding="utf-8")
+        eis = eis.replace(
+            "</head>",
+            "<style>#foot\\000065r{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer" data-slot="slot:footer">页脚</p>',
+        )
+        (escaped_id_sheet / "preview.html").write_text(eis, encoding="utf-8")
+        eis_err, _ = lint_theme.lint_theme(escaped_id_sheet, schema)
+        assert_has(eis_err, "slot:footer", "CSS 转义后的 #footer 选择器应能隐藏标记")
+
+        atmedia_print_sheet = Path(tmp) / "atmedia-print-sheet-pack"
+        write_mini_theme(atmedia_print_sheet)
+        ams = (atmedia_print_sheet / "preview.html").read_text(encoding="utf-8")
+        ams = ams.replace(
+            "</head>",
+            "<style>@media print { #footer { display:none } }</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (atmedia_print_sheet / "preview.html").write_text(ams, encoding="utf-8")
+        ams_err, _ = lint_theme.lint_theme(atmedia_print_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in ams_err),
+            f"@media print 内的规则不应作用于屏幕预览: {ams_err}",
+        )
+
+        disabled_sheet = Path(tmp) / "disabled-sheet-pack"
+        write_mini_theme(disabled_sheet)
+        dbs = (disabled_sheet / "preview.html").read_text(encoding="utf-8")
+        dbs = dbs.replace(
+            "</head>",
+            "<style>#footer:disabled{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<button id="footer" disabled data-slot="slot:footer">页脚</button>',
+        )
+        (disabled_sheet / "preview.html").write_text(dbs, encoding="utf-8")
+        dbs_err, _ = lint_theme.lint_theme(disabled_sheet, schema)
+        assert_has(dbs_err, "slot:footer", ":disabled 在 disabled 元素上应生效并隐藏标记")
+
+        stray_td_attr = Path(tmp) / "stray-td-attr-pack"
+        write_mini_theme(stray_td_attr)
+        sta = (stray_td_attr / "preview.html").read_text(encoding="utf-8")
+        (stray_td_attr / "preview.html").write_text(
+            sta.replace("<p>slot:footer</p>", '<td data-slot="slot:footer"></td>'),
+            encoding="utf-8",
+        )
+        sta_err, _ = lint_theme.lint_theme(stray_td_attr, schema)
+        assert_has(sta_err, "slot:footer", "无 table 上下文的游离 td 属性不算覆盖")
+
         descendant_sheet = Path(tmp) / "descendant-sheet-pack"
         write_mini_theme(descendant_sheet)
         dcs = (descendant_sheet / "preview.html").read_text(encoding="utf-8")
@@ -1576,6 +1662,17 @@ def main() -> int:
         (lazy_indent / "THEME.md").write_text(liz, encoding="utf-8")
         liz_err, _ = lint_theme.lint_theme(lazy_indent, schema)
         assert_true(not liz_err, f"段落缩进续行后的 type-7 不应吞掉标题: {liz_err}")
+
+        link_ref_type7 = Path(tmp) / "link-ref-type7-pack"
+        write_mini_theme(link_ref_type7)
+        lrt = (link_ref_type7 / "THEME.md").read_text(encoding="utf-8")
+        lrt = lrt.replace("## 结构模型\n", "[foo]: /url\n<x>\n## 结构模型\n")
+        (link_ref_type7 / "THEME.md").write_text(lrt, encoding="utf-8")
+        lrt_err, _ = lint_theme.lint_theme(link_ref_type7, schema)
+        assert_true(
+            any("结构模型" in e for e in lrt_err),
+            f"链接引用定义后 type-7 应吞掉后续标题: {lrt_err}",
+        )
 
         setext_type7 = Path(tmp) / "setext-type7-pack"
         write_mini_theme(setext_type7)

@@ -529,6 +529,7 @@ MD_LIST = re.compile(r"^ {0,3}(?:[-*+]|\d+[.)])\s")
 MD_QUOTE = re.compile(r"^ {0,3}>")
 MD_THEMATIC = re.compile(r"^ {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$")
 SETEXT_UNDERLINE = re.compile(r"^ {0,3}(?:=+|-+)\s*$")
+LINK_REF_DEF = re.compile(r"^ {0,3}\[[^\]\n]+\]:\s+\S")
 
 
 def indent_columns(raw: str) -> int:
@@ -558,6 +559,8 @@ def is_paragraph_line(raw: str, *, in_paragraph: bool = False) -> bool:
     if ATX_HEADING.match(raw) or MD_LIST.match(raw) or MD_QUOTE.match(raw) or MD_THEMATIC.match(raw):
         return False
     if FENCE_OPEN.match(raw):
+        return False
+    if not in_paragraph and LINK_REF_DEF.match(raw):
         return False
     return True
 
@@ -1164,23 +1167,170 @@ def media_applies_to_screen(media: str | None) -> bool:
     return False
 
 
+STYLE_SKIP_SUBTREES = frozenset({"template", "script", "noscript"})
+FORM_CTRL_TAGS = frozenset({
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "fieldset",
+    "optgroup",
+    "option",
+})
+
+
+class _StyleBlockCollector(HTMLParser):
+    """Collect <style> text from active document nodes, skipping comments and inert trees."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.skip = 0
+        self.in_style = False
+        self.cur_attrs: dict[str, str] = {}
+        self.buf: list[str] = []
+        self.blocks: list[tuple[dict[str, str], str]] = []
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        if self.skip or self.in_style:
+            return
+        if tag.lower() in STYLE_SKIP_SUBTREES:
+            return
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        ltag = tag.lower()
+        if self.skip:
+            if ltag in STYLE_SKIP_SUBTREES:
+                self.skip += 1
+            return
+        if ltag in STYLE_SKIP_SUBTREES:
+            self.skip = 1
+            return
+        if ltag == "style":
+            self.in_style = True
+            self.cur_attrs = {key.lower(): (value or "") for key, value in attrs}
+            self.buf = []
+
+    def handle_endtag(self, tag: str) -> None:
+        ltag = tag.lower()
+        if self.in_style and ltag == "style":
+            self.blocks.append((self.cur_attrs, "".join(self.buf)))
+            self.in_style = False
+            self.buf = []
+            return
+        if self.skip and ltag in STYLE_SKIP_SUBTREES:
+            self.skip = max(0, self.skip - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self.in_style and not self.skip:
+            self.buf.append(data)
+
+
+def collect_active_style_blocks(html: str) -> list[tuple[dict[str, str], str]]:
+    collector = _StyleBlockCollector()
+    try:
+        collector.feed(html or "")
+        collector.close()
+    except Exception:  # noqa: BLE001
+        return collector.blocks
+    return collector.blocks
+
+
+def _css_consume_block(text: str, i: int) -> tuple[str, int]:
+    """text[i] is '{'. Return (inner, index after the matching '}')."""
+    n = len(text)
+    i += 1
+    start = i
+    depth = 1
+    quote = None
+    while i < n and depth:
+        ch = text[i]
+        if quote:
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i], i + 1
+        i += 1
+    return text[start:i], n
+
+
+def iter_css_style_rules(css: str, *, active: bool = True):
+    """Yield (selector, body) for style rules in currently active media."""
+    text = CSS_COMMENT.sub("", css or "")
+    i = 0
+    n = len(text)
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        start = i
+        quote = None
+        found = False
+        while i < n:
+            ch = text[i]
+            if quote:
+                if ch == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if ch == quote:
+                    quote = None
+                i += 1
+                continue
+            if ch in "\"'":
+                quote = ch
+                i += 1
+                continue
+            if ch == "{":
+                prelude = text[start:i].strip()
+                body, i = _css_consume_block(text, i)
+                found = True
+                if prelude.startswith("@"):
+                    match = re.match(r"@([A-Za-z-]+)", prelude)
+                    name = match.group(1).lower() if match else ""
+                    if name == "media":
+                        query = prelude[match.end() :].strip() if match else ""
+                        inner_active = active and media_applies_to_screen(query)
+                        yield from iter_css_style_rules(body, active=inner_active)
+                    elif name in {"layer", "supports", "scope", "container"}:
+                        yield from iter_css_style_rules(body, active=False)
+                elif active and prelude:
+                    yield prelude, body
+                break
+            if ch == ";":
+                found = True
+                i += 1
+                break
+            i += 1
+        if not found:
+            break
+
+
 def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[str, bool]]]]:
     """Selectors from screen-applied <style> with display/opacity/visibility declarations."""
     rules: list[tuple[str, dict[str, tuple[str, bool]]]] = []
-    for attr_text, block in STYLE_TAG.findall(html or ""):
-        attrs = html_start_attrs(attr_text)
+    for attrs, block in collect_active_style_blocks(html):
         if not media_applies_to_screen(attrs.get("media") if "media" in attrs else None):
             continue
-        css = CSS_COMMENT.sub("", block)
-        for match in re.finditer(r"([^{}]+)\{([^{}]+)\}", css):
-            decls = winning_style_decls(match.group(2))
+        for selector_text, body in iter_css_style_rules(block, active=True):
+            decls = winning_style_decls(body)
             tracked: dict[str, tuple[str, bool]] = {}
             for prop in ("display", "opacity", "visibility"):
                 if prop in decls:
                     tracked[prop] = decls[prop]
             if not tracked:
                 continue
-            for selector in split_selector_list(match.group(1)):
+            for selector in split_selector_list(selector_text):
                 rules.append((selector, tracked))
     return rules
 
@@ -1275,51 +1425,80 @@ def strip_css_pseudos(subject: str) -> str:
     return subject
 
 
+def _subject_specificity(subject: str) -> tuple[int, int, int]:
+    ids = 0
+    classes = 0
+    types = 0
+    i = 0
+    n = len(subject)
+    named = re.match(r"^[a-zA-Z][a-zA-Z0-9-]*", subject)
+    if named:
+        types += 1
+        i = named.end()
+    elif n and subject[0] == "*":
+        i = 1
+    while i < n:
+        ch = subject[i]
+        if ch == "#":
+            ids += 1
+            i += 1
+            while i < n and subject[i] not in ".#[":
+                i += 1
+        elif ch == ".":
+            classes += 1
+            i += 1
+            while i < n and subject[i] not in ".#[":
+                i += 1
+        elif ch == "[":
+            classes += 1
+            j = i + 1
+            quote = None
+            while j < n:
+                cj = subject[j]
+                if quote:
+                    if cj == quote:
+                        quote = None
+                    j += 1
+                    continue
+                if cj in "\"'":
+                    quote = cj
+                elif cj == "]":
+                    break
+                j += 1
+            i = j + 1 if j < n else n
+        else:
+            i += 1
+    return ids, classes, types
+
+
 def css_specificity(selector: str) -> tuple[int, int, int]:
     ids = 0
     classes = 0
     types = 0
     for _comb, compound in split_selector_chain(selector):
-        subject = strip_css_pseudos(compound)
-        i = 0
-        n = len(subject)
-        named = re.match(r"^[a-zA-Z][a-zA-Z0-9-]*", subject)
-        if named:
-            types += 1
-            i = named.end()
-        elif n and subject[0] == "*":
-            i = 1
-        while i < n:
-            ch = subject[i]
-            if ch == "#":
-                ids += 1
-                i += 1
-                while i < n and subject[i] not in ".#[":
-                    i += 1
-            elif ch == ".":
-                classes += 1
-                i += 1
-                while i < n and subject[i] not in ".#[":
-                    i += 1
-            elif ch == "[":
-                classes += 1
-                j = i + 1
-                quote = None
-                while j < n:
-                    cj = subject[j]
-                    if quote:
-                        if cj == quote:
-                            quote = None
-                        j += 1
-                        continue
-                    if cj in "\"'":
-                        quote = cj
-                    elif cj == "]":
-                        break
-                    j += 1
-                i = j + 1 if j < n else n
-            else:
-                i += 1
+        a, b, c = _subject_specificity(strip_css_pseudos(compound))
+        ids += a
+        classes += b
+        types += c
+        for name, arg, is_element, malformed in iter_compound_pseudos(compound):
+            if malformed:
+                continue
+            if is_element:
+                types += 1
+                continue
+            if name == "where":
+                continue
+            if name in {"not", "is"}:
+                best = (0, 0, 0)
+                for sel in split_selector_list(arg or ""):
+                    spec = css_specificity(sel)
+                    if spec > best:
+                        best = spec
+                ids += best[0]
+                classes += best[1]
+                types += best[2]
+                continue
+            classes += 1
     return ids, classes, types
 
 
@@ -1492,12 +1671,44 @@ def _selector_list_match_state(arg: str, tag: str, attrs) -> bool | None:
     return saw_true
 
 
+def css_attr_pseudo_matches(name: str, tag: str, attrs) -> bool | None:
+    """True/False when the pseudo is attribute-backed; None if it is dynamic."""
+    has = lambda key: any(attr.lower() == key for attr, _ in attrs)
+    if name == "disabled":
+        return has("disabled")
+    if name == "enabled":
+        return tag in FORM_CTRL_TAGS and not has("disabled")
+    if name == "checked":
+        if tag == "option":
+            return has("selected")
+        return has("checked")
+    if name == "required":
+        return has("required")
+    if name == "optional":
+        return tag in FORM_CTRL_TAGS and not has("required")
+    if name == "read-only":
+        return has("readonly")
+    if name == "read-write":
+        if has("readonly"):
+            return False
+        if tag in {"input", "textarea"}:
+            return True
+        return any(
+            key.lower() == "contenteditable" and (value or "").lower() not in {"false", "inherit"}
+            for key, value in attrs
+        )
+    return None
+
+
 def css_pseudos_state(compound: str, tag: str, attrs) -> bool | None:
     """True if all pseudos are satisfied, False if not, None if unevaluable."""
     for name, arg, is_element, malformed in iter_compound_pseudos(compound):
         if malformed or is_element:
             return None
         if name in CSS_STATE_PSEUDOS:
+            attr_state = css_attr_pseudo_matches(name, tag, attrs)
+            if attr_state is True:
+                continue
             return False
         if name in {"not", "is", "where"}:
             if arg is None:
@@ -1535,7 +1746,7 @@ def _css_subject_matches(subject: str, tag: str, attrs) -> bool:
     n = len(subject)
     named = re.match(r"^[a-zA-Z][a-zA-Z0-9-]*", subject)
     if named:
-        if named.group(0).lower() != tag:
+        if decode_css_escapes(named.group(0)).lower() != tag:
             return False
         i = named.end()
     elif n == 0 or subject[0] not in "#.[":
@@ -1546,14 +1757,14 @@ def _css_subject_matches(subject: str, tag: str, attrs) -> bool:
             j = i + 1
             while j < n and subject[j] not in ".#[":
                 j += 1
-            if ad.get("id") != subject[i + 1 : j]:
+            if ad.get("id") != decode_css_escapes(subject[i + 1 : j]):
                 return False
             i = j
         elif ch == ".":
             j = i + 1
             while j < n and subject[j] not in ".#[":
                 j += 1
-            if subject[i + 1 : j] not in ad.get("class", "").split():
+            if decode_css_escapes(subject[i + 1 : j]) not in ad.get("class", "").split():
                 return False
             i = j
         elif ch == "[":
@@ -1789,6 +2000,8 @@ class PreviewMarkerCollector(HTMLParser):
 
     def _open(self, tag: str, attrs) -> None:
         ltag = tag.lower()
+        if ltag in TABLE_START and not any(item[0] == "table" for item in self.stack):
+            return
         self._implied_close(ltag)
         self._close_nested_anchor(ltag)
         self._clear_table_stack(ltag)
