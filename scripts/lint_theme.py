@@ -70,7 +70,7 @@ ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
 CJK = re.compile(r"[一-鿿㐀-䶿]")
 PLACEHOLDER = re.compile(r"\{\{")
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
-PREVIEW_ID_TAIL = re.compile(r"[a-z0-9_-]")
+PREVIEW_ID_TAIL = re.compile(r"[a-zA-Z0-9_-]")
 RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+[.)])\s+`?([a-z][a-z0-9_-]*)`?\s*[:：]\s*(\S.*)$", re.I)
 RECIPE_PLAIN = re.compile(r"^`?([a-z][a-z0-9_-]*)`?\s*[:：]\s*(\S.*)$", re.I)
 RECIPE_SLOT = re.compile(
@@ -92,6 +92,47 @@ VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "area", "base", "col", 
 HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 CSS_IMPORTANT = re.compile(r"!\s*important\s*$", re.I)
+_CSS_DISPLAY_OK = frozenset({
+    "none",
+    "inline",
+    "block",
+    "inline-block",
+    "flex",
+    "inline-flex",
+    "grid",
+    "inline-grid",
+    "flow-root",
+    "contents",
+    "list-item",
+    "table",
+    "inline-table",
+    "table-row",
+    "table-cell",
+    "table-column",
+    "table-column-group",
+    "table-header-group",
+    "table-footer-group",
+    "table-row-group",
+    "table-caption",
+    "run-in",
+    "-webkit-box",
+    "-webkit-flex",
+    "inherit",
+    "initial",
+    "unset",
+    "revert",
+    "revert-layer",
+})
+_CSS_VIS_OK = frozenset({
+    "visible",
+    "hidden",
+    "collapse",
+    "inherit",
+    "initial",
+    "unset",
+    "revert",
+    "revert-layer",
+})
 _CSS_HEX = frozenset("0123456789abcdefABCDEF")
 _CSS_ESCAPE_WS = frozenset(" \t\n\r\f")
 HTML_TAG_NAME = re.compile(r"^[a-z][a-z0-9-]*$", re.I)
@@ -677,13 +718,59 @@ def recipe_entry_ids(section: str, sig_ids: set[str]) -> set[str]:
     return found
 
 
-def strip_html_comments(text: str) -> str:
+def _markdown_code_span_ranges(text: str) -> list[tuple[int, int]]:
+    """Inclusive-start, exclusive-end ranges of CommonMark inline code spans."""
+    ranges: list[tuple[int, int]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] != "`":
+            i += 1
+            continue
+        start = i
+        while i < n and text[i] == "`":
+            i += 1
+        opener_len = i - start
+        j = i
+        closer = None
+        while j < n:
+            if text[j] != "`":
+                j += 1
+                continue
+            k = j
+            while k < n and text[k] == "`":
+                k += 1
+            if k - j == opener_len:
+                closer = k
+                break
+            j = k
+        if closer is None:
+            continue
+        ranges.append((start, closer))
+        i = closer
+    return ranges
+
+
+def _in_index_ranges(pos: int, ranges: list[tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in ranges)
+
+
+def strip_html_comments(text: str, *, markdown: bool = False) -> str:
     """Remove HTML comments. An unclosed comment hides through end of text."""
+    skip: list[tuple[int, int]] = []
+    if markdown:
+        for fence in iter_top_level_fences(text):
+            skip.append((fence["start"], fence["end"]))
+        for start, end in unfenced_spans(text):
+            for span_start, span_end in _markdown_code_span_ranges(text[start:end]):
+                skip.append((start + span_start, start + span_end))
     pieces: list[str] = []
     i = 0
     n = len(text)
     while i < n:
         start = text.find(HTML_COMMENT_OPEN, i)
+        while start != -1 and _in_index_ranges(start, skip):
+            start = text.find(HTML_COMMENT_OPEN, start + 1)
         if start == -1:
             pieces.append(text[i:])
             break
@@ -715,15 +802,30 @@ class _FenceUsableCollector(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.tags: list[str] = []
         self.has_placeholder = False
+        self.stack: list[str] = []
 
     def handle_startendtag(self, tag: str, attrs) -> None:
         self.handle_starttag(tag, attrs)
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        self.tags.append(html_tag_name(tag))
+        ltag = html_tag_name(tag)
+        if ltag in TABLE_START and "table" not in self.stack:
+            return
+        self.tags.append(ltag)
         for _name, value in attrs:
             if value and PLACEHOLDER.search(value):
                 self.has_placeholder = True
+        if ltag not in VOID_TAGS:
+            self.stack.append(ltag)
+
+    def handle_endtag(self, tag: str) -> None:
+        ltag = html_tag_name(tag)
+        if ltag not in self.stack:
+            return
+        while self.stack:
+            top = self.stack.pop()
+            if top == ltag:
+                return
 
     def handle_data(self, data: str) -> None:
         if PLACEHOLDER.search(data or ""):
@@ -757,12 +859,61 @@ class _CompletedTagCounter(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.starts = 0
+        self.stack: list[str] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
+        ltag = html_tag_name(tag)
+        if ltag in TABLE_START and "table" not in self.stack:
+            return
         self.starts += 1
+        if ltag not in VOID_TAGS:
+            self.stack.append(ltag)
 
     def handle_startendtag(self, tag: str, attrs) -> None:
-        self.starts += 1
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        ltag = html_tag_name(tag)
+        if ltag not in self.stack:
+            return
+        while self.stack:
+            top = self.stack.pop()
+            if top == ltag:
+                return
+
+
+def strip_css_comments(text: str) -> str:
+    """Remove /* */ comments, leaving delimiters that appear inside quoted strings."""
+    out: list[str] = []
+    i = 0
+    n = len(text or "")
+    quote = None
+    while i < n:
+        ch = text[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            if j == -1:
+                break
+            i = j + 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def decode_css_escapes(text: str) -> str:
@@ -807,7 +958,25 @@ def decode_css_escapes(text: str) -> str:
 
 def normalize_style(style: str) -> str:
     """Strip CSS comments then decode identifier escapes."""
-    return decode_css_escapes(CSS_COMMENT.sub("", style or ""))
+    return decode_css_escapes(strip_css_comments(style or ""))
+
+
+def css_decl_value_applies(prop: str, token: str) -> bool:
+    """False when a declaration value is ignored by CSS (invalid token)."""
+    if not token:
+        return False
+    if prop == "display":
+        return token in _CSS_DISPLAY_OK or token.startswith("-")
+    if prop == "visibility":
+        return token in _CSS_VIS_OK
+    if prop == "opacity":
+        raw = token[:-1] if token.endswith("%") else token
+        try:
+            float(raw)
+            return True
+        except ValueError:
+            return False
+    return True
 
 
 def is_html_type7_line(raw: str) -> bool:
@@ -896,6 +1065,8 @@ def winning_style_decls(style: str) -> dict[str, tuple[str, bool]]:
         important = bool(CSS_IMPORTANT.search(value))
         raw = CSS_IMPORTANT.sub("", value).strip()
         token = raw.split()[0].lower() if raw else ""
+        if not css_decl_value_applies(prop, token):
+            continue
         prev = winning.get(prop)
         if prev is not None and prev[1] and not important:
             continue
@@ -1064,7 +1235,7 @@ def strip_html_blocks(text: str) -> str:
 
 def visible_structure_markdown(text: str) -> str:
     """Markdown that survives fences, HTML comments, and raw HTML blocks."""
-    return strip_html_comments(strip_html_blocks(unfenced_markdown(text)))
+    return strip_html_comments(strip_html_blocks(unfenced_markdown(text)), markdown=True)
 
 
 def has_preview_marker(haystack: str, ident: str, *prefixes: str) -> bool:
@@ -1210,17 +1381,85 @@ def media_applies_to_screen(media: str | None) -> bool:
     return False
 
 
+def _split_supports_keyword(text: str, keyword: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    quote = None
+    i = 0
+    n = len(text)
+    last = 0
+    kwlen = len(keyword)
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+            i += 1
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and text[i : i + kwlen].lower() == keyword:
+            before = text[i - 1] if i else " "
+            after = text[i + kwlen] if i + kwlen < n else " "
+            if not (before.isalnum() or before == "-") and not (after.isalnum() or after == "-"):
+                parts.append(text[last:i].strip())
+                i += kwlen
+                last = i
+                continue
+        i += 1
+    rest = text[last:].strip()
+    if parts:
+        if rest:
+            parts.append(rest)
+        return [item for item in parts if item]
+    return [text.strip()] if text.strip() else []
+
+
+def _unwrap_supports_parens(text: str) -> str:
+    current = text.strip()
+    while current.startswith("(") and current.endswith(")"):
+        depth = 0
+        split = False
+        for i, ch in enumerate(current):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and i != len(current) - 1:
+                    split = True
+                    break
+        if split or depth != 0:
+            break
+        current = current[1:-1].strip()
+    return current
+
+
 def supports_applies(query: str) -> bool:
-    """True for simple @supports (property: value) queries a screen browser satisfies."""
-    text = (query or "").strip()
+    """True for @supports queries a typical screen browser satisfies."""
+    text = _unwrap_supports_parens(query or "")
     if not text:
         return True
+    or_parts = _split_supports_keyword(text, "or")
+    if len(or_parts) > 1:
+        return any(supports_applies(part) for part in or_parts)
+    and_parts = _split_supports_keyword(text, "and")
+    if len(and_parts) > 1:
+        return all(supports_applies(part) for part in and_parts)
     lower = text.lower()
     if lower.startswith("not") and (len(text) == 3 or not text[3].isalnum()):
         return not supports_applies(text[3:].strip())
-    inner = text
-    if inner.startswith("(") and inner.endswith(")") and inner.count("(") == 1:
-        inner = inner[1:-1].strip()
+    inner = _unwrap_supports_parens(text)
+    if inner != text:
+        return supports_applies(inner)
     return bool(re.match(r"^[A-Za-z-]+\s*:\s*.+$", inner))
 
 
@@ -1321,9 +1560,9 @@ def _css_consume_block(text: str, i: int) -> tuple[str, int]:
     return text[start:i], n
 
 
-def iter_css_style_rules(css: str, *, active: bool = True):
-    """Yield (selector, body) for style rules in currently active media."""
-    text = CSS_COMMENT.sub("", css or "")
+def iter_css_style_rules(css: str, *, active: bool = True, layered: bool = False):
+    """Yield (selector, body, layered) for style rules in currently active media."""
+    text = strip_css_comments(css or "")
     i = 0
     n = len(text)
     while i < n:
@@ -1358,16 +1597,18 @@ def iter_css_style_rules(css: str, *, active: bool = True):
                     if name == "media":
                         query = prelude[match.end() :].strip() if match else ""
                         inner_active = active and media_applies_to_screen(query)
-                        yield from iter_css_style_rules(body, active=inner_active)
+                        yield from iter_css_style_rules(body, active=inner_active, layered=layered)
                     elif name == "layer":
-                        yield from iter_css_style_rules(body, active=active)
+                        yield from iter_css_style_rules(body, active=active, layered=True)
                     elif name == "supports":
                         query = prelude[match.end() :].strip() if match else ""
-                        yield from iter_css_style_rules(body, active=active and supports_applies(query))
+                        yield from iter_css_style_rules(
+                            body, active=active and supports_applies(query), layered=layered
+                        )
                     elif name in {"scope", "container"}:
-                        yield from iter_css_style_rules(body, active=False)
+                        yield from iter_css_style_rules(body, active=False, layered=layered)
                 elif active and prelude:
-                    yield prelude, body
+                    yield prelude, body, layered
                 break
             if ch == ";":
                 found = True
@@ -1378,13 +1619,13 @@ def iter_css_style_rules(css: str, *, active: bool = True):
             break
 
 
-def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[str, bool]]]]:
+def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[str, bool]], bool]]:
     """Selectors from screen-applied <style> with display/opacity/visibility declarations."""
-    rules: list[tuple[str, dict[str, tuple[str, bool]]]] = []
+    rules: list[tuple[str, dict[str, tuple[str, bool]], bool]] = []
     for attrs, block in collect_active_style_blocks(html):
         if not media_applies_to_screen(attrs.get("media") if "media" in attrs else None):
             continue
-        for selector_text, body in iter_css_style_rules(block, active=True):
+        for selector_text, body, layered in iter_css_style_rules(block, active=True):
             decls = winning_style_decls(body)
             tracked: dict[str, tuple[str, bool]] = {}
             for prop in ("display", "opacity", "visibility"):
@@ -1396,7 +1637,7 @@ def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[
             if not selectors or any(not selector_is_valid(item) for item in selectors):
                 continue
             for selector in selectors:
-                rules.append((selector, tracked))
+                rules.append((selector, tracked, layered))
     return rules
 
 
@@ -1680,8 +1921,73 @@ CSS_KNOWN_PSEUDOS = CSS_STATE_PSEUDOS | {
 }
 
 
+def _subject_syntax_ok(subject: str) -> bool:
+    """False for empty/malformed #id, .class, or [] attribute selectors."""
+    text = subject.strip()
+    if not text:
+        return True
+    i = 0
+    n = len(text)
+    if text[0] == "*":
+        i = 1
+    elif text[0].isalpha() or text[0] in "_-":
+        while i < n and (text[i].isalnum() or text[i] in "-_\\"):
+            i += 1
+    while i < n:
+        ch = text[i]
+        if ch == "#":
+            i += 1
+            start = i
+            while i < n and text[i] not in ".#[":
+                i += 1
+            if i == start:
+                return False
+        elif ch == ".":
+            i += 1
+            start = i
+            while i < n and text[i] not in ".#[":
+                i += 1
+            if i == start:
+                return False
+        elif ch == "[":
+            j = i + 1
+            quote = None
+            while j < n:
+                cj = text[j]
+                if quote:
+                    if cj == "\\" and j + 1 < n:
+                        j += 2
+                        continue
+                    if cj == quote:
+                        quote = None
+                    j += 1
+                    continue
+                if cj in "\"'":
+                    quote = cj
+                    j += 1
+                    continue
+                if cj == "]":
+                    break
+                j += 1
+            if j >= n or text[j] != "]":
+                return False
+            inner = text[i + 1 : j].strip()
+            if not inner:
+                return False
+            spec = inner
+            flag_m = re.search(r"\s+([iIsS])\s*$", spec)
+            if flag_m:
+                spec = spec[: flag_m.start()].rstrip()
+            if not re.match(r"^([A-Za-z_:][\w:.-]*)\s*(?:(~=|\|=|\^=|\$=|\*=|=)\s*(.+))?$", spec):
+                return False
+            i = j + 1
+        else:
+            return False
+    return True
+
+
 def selector_is_valid(selector: str) -> bool:
-    """False when a style-rule selector contains an unknown/malformed pseudo."""
+    """False when a style-rule selector contains an unknown/malformed compound."""
     chain = split_selector_chain(selector.strip())
     if not chain:
         return False
@@ -1693,6 +1999,8 @@ def selector_is_valid(selector: str) -> bool:
                 return False
             if name not in CSS_KNOWN_PSEUDOS and not name.startswith("-"):
                 return False
+        if not _subject_syntax_ok(strip_css_pseudos(compound)):
+            return False
     return True
 
 
@@ -2000,7 +2308,7 @@ def css_selector_matches(
 class PreviewMarkerCollector(HTMLParser):
     """Collect contiguous visible text and intended attributes; skip hidden subtrees."""
 
-    def __init__(self, sheet_hides: list[tuple[str, dict[str, tuple[str, bool]]]] | None = None) -> None:
+    def __init__(self, sheet_hides: list[tuple[str, dict[str, tuple[str, bool]], bool]] | None = None) -> None:
         super().__init__(convert_charrefs=True)
         self.stack: list[tuple[str, bool, bool, bool, bool, bool]] = []
         self.skip_depth = 0
@@ -2090,22 +2398,30 @@ class PreviewMarkerCollector(HTMLParser):
     def _sheet_hide(self, tag: str, attrs) -> tuple[bool, bool, bool, bool, str | None, bool]:
         ancestors = list(self.dom_open)
         prev_siblings = list(self.level_children[-1])
-        winning: dict[str, tuple[str, bool, tuple[int, int, int], int]] = {}
-        for order, (selector, decls) in enumerate(self.sheet_hides):
+        winning: dict[str, tuple[str, bool, bool, tuple[int, int, int], int]] = {}
+        for order, (selector, decls, layered) in enumerate(self.sheet_hides):
             if not css_selector_matches(selector, tag, attrs, ancestors, prev_siblings):
                 continue
             spec = css_specificity(selector)
             for prop, (token, imp) in decls.items():
                 prev = winning.get(prop)
                 if prev is None:
-                    winning[prop] = (token, imp, spec, order)
+                    winning[prop] = (token, imp, layered, spec, order)
                     continue
-                _tok, p_imp, p_spec, p_ord = prev
+                _tok, p_imp, p_layer, p_spec, p_ord = prev
                 if imp != p_imp:
                     if imp:
-                        winning[prop] = (token, imp, spec, order)
-                elif spec > p_spec or (spec == p_spec and order >= p_ord):
-                    winning[prop] = (token, imp, spec, order)
+                        winning[prop] = (token, imp, layered, spec, order)
+                    continue
+                if layered != p_layer:
+                    if imp:
+                        if layered:
+                            winning[prop] = (token, imp, layered, spec, order)
+                    elif not layered:
+                        winning[prop] = (token, imp, layered, spec, order)
+                    continue
+                if spec > p_spec or (spec == p_spec and order >= p_ord):
+                    winning[prop] = (token, imp, layered, spec, order)
         disp, disp_imp = winning.get("display", ("", False, (0, 0, 0), -1))[:2]
         opac, opac_imp = winning.get("opacity", ("", False, (0, 0, 0), -1))[:2]
         vis_tok, vis_imp = winning.get("visibility", ("", False, (0, 0, 0), -1))[:2]
@@ -2476,6 +2792,8 @@ class ThemeHtmlInspector(HTMLParser):
 
     def _open(self, tag: str, attrs, *, void: bool) -> None:
         ltag = html_tag_name(tag)
+        if ltag in TABLE_START and not any(item[0] == "table" for item in self.stack):
+            return
         void = ltag in VOID_TAGS
         self._implied_close(ltag)
         self._close_nested_anchor(ltag)
@@ -2663,7 +2981,7 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
         md_text = ""
     else:
         md_text = md_path.read_text(encoding="utf-8")
-        md_source = strip_html_comments(md_text)
+        md_source = strip_html_comments(md_text, markdown=True)
         structure_md = visible_structure_markdown(md_text)
         for heading in REQUIRED_MD_HEADINGS:
             if not _has_heading_line(structure_md, heading):

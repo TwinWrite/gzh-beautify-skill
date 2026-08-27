@@ -560,6 +560,17 @@ def main() -> int:
         f"CSS 注释拆开的 position:fixed 应失败: {pc_err}",
     )
 
+    pos_in_url = (
+        '<section style="max-width:677px;margin:0 auto;'
+        "background:url(&quot;https://example.test/position/**/:fixed.png&quot;)\">"
+        f"{body_p('正文。')}</section>"
+    )
+    piu_err, _, _ = validate_article.validate(pos_in_url)
+    assert_true(
+        not any("position" in e.lower() or "fixed" in e.lower() for e in piu_err),
+        f"URL 字符串里的 position/**/:fixed 不应当禁用定位: {piu_err}",
+    )
+
     pos_escape = (
         '<section style="pos\\69 tion:fixed;max-width:677px;margin:0 auto">'
         f"{body_p('正文。')}</section>"
@@ -1393,6 +1404,78 @@ def main() -> int:
         lys_err, _ = lint_theme.lint_theme(layer_sheet, schema)
         assert_has(lys_err, "slot:footer", "@layer 内的隐藏规则应生效")
 
+        layer_lose_sheet = Path(tmp) / "layer-lose-sheet-pack"
+        write_mini_theme(layer_lose_sheet)
+        lls = (layer_lose_sheet / "preview.html").read_text(encoding="utf-8")
+        lls = lls.replace(
+            "</head>",
+            "<style>#footer { display:block } @layer x { #footer { display:none } }</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (layer_lose_sheet / "preview.html").write_text(lls, encoding="utf-8")
+        lls_err, _ = lint_theme.lint_theme(layer_lose_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in lls_err),
+            f"无层声明应压过 @layer 内的 display:none: {lls_err}",
+        )
+
+        supports_and_sheet = Path(tmp) / "supports-and-sheet-pack"
+        write_mini_theme(supports_and_sheet)
+        sas = (supports_and_sheet / "preview.html").read_text(encoding="utf-8")
+        sas = sas.replace(
+            "</head>",
+            "<style>@supports (display:block) and (color:red){#footer{display:none}}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (supports_and_sheet / "preview.html").write_text(sas, encoding="utf-8")
+        sas_err, _ = lint_theme.lint_theme(supports_and_sheet, schema)
+        assert_has(sas_err, "slot:footer", "@supports (display:block) and (color:red) 内的隐藏规则应生效")
+
+        bogus_display_sheet = Path(tmp) / "bogus-display-sheet-pack"
+        write_mini_theme(bogus_display_sheet)
+        bds = (bogus_display_sheet / "preview.html").read_text(encoding="utf-8")
+        bds = bds.replace(
+            "</head>",
+            "<style>#footer { display:none; display:bogus }</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (bogus_display_sheet / "preview.html").write_text(bds, encoding="utf-8")
+        bds_err, _ = lint_theme.lint_theme(bogus_display_sheet, schema)
+        assert_has(bds_err, "slot:footer", "无效 display:bogus 不应覆盖 display:none")
+
+        empty_attr_sheet = Path(tmp) / "empty-attr-sheet-pack"
+        write_mini_theme(empty_attr_sheet)
+        eas = (empty_attr_sheet / "preview.html").read_text(encoding="utf-8")
+        eas = eas.replace(
+            "</head>",
+            "<style>#footer, [] { display:none }</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (empty_attr_sheet / "preview.html").write_text(eas, encoding="utf-8")
+        eas_err, _ = lint_theme.lint_theme(empty_attr_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in eas_err),
+            f"含 [] 的选择器列表应整条丢弃: {eas_err}",
+        )
+
+        footer_extra_preview = Path(tmp) / "footer-extra-preview-pack"
+        write_mini_theme(footer_extra_preview)
+        fep = (footer_extra_preview / "preview.html").read_text(encoding="utf-8")
+        (footer_extra_preview / "preview.html").write_text(
+            fep.replace("<p>slot:footer</p>", "<p>slot:footerExtra</p>"),
+            encoding="utf-8",
+        )
+        fep_err, _ = lint_theme.lint_theme(footer_extra_preview, schema)
+        assert_has(fep_err, "slot:footer", "slot:footerExtra 不应顶替 slot:footer")
+
         invalid_list_sheet = Path(tmp) / "invalid-list-sheet-pack"
         write_mini_theme(invalid_list_sheet)
         ils = (invalid_list_sheet / "preview.html").read_text(encoding="utf-8")
@@ -1609,6 +1692,13 @@ def main() -> int:
             any("缺少章节" in e or "缺少 ### slot:" in e for e in commented_err),
             f"HTML 注释里的 THEME.md 结构不应算数: {commented_err}",
         )
+
+        comment_span_md = Path(tmp) / "comment-span-md-pack"
+        write_mini_theme(comment_span_md)
+        raw_cspan = (comment_span_md / "THEME.md").read_text(encoding="utf-8")
+        (comment_span_md / "THEME.md").write_text("`<!--`\n\n" + raw_cspan, encoding="utf-8")
+        cspan_err, _ = lint_theme.lint_theme(comment_span_md, schema)
+        assert_true(not cspan_err, f"代码 span 里的 <!-- 不应吞掉后续结构: {cspan_err}")
 
         html_wrapped_md = Path(tmp) / "html-wrapped-md-pack"
         write_mini_theme(html_wrapped_md)
@@ -1966,6 +2056,15 @@ def main() -> int:
             f"组件 CSS 转义 position:fixed 应失败: {escape_comp}",
         )
 
+        url_comment_comp = lint_theme.lint_html_block(
+            '<p style="margin:0;font-size:16px;background:url(&quot;https://example.test/position/**/:fixed.png&quot;)"><span leaf="">{{footer}}</span></p>',
+            "### slot:footer",
+        )
+        assert_true(
+            not any("position" in msg.lower() or "fixed" in msg.lower() for _, msg in url_comment_comp),
+            f"组件 URL 字符串里的注释分隔符不应当禁用定位: {url_comment_comp}",
+        )
+
         leaf_block_comp = lint_theme.lint_html_block(
             '<span leaf=""><p style="margin:0">中文。</p></span>',
             "### slot:footer",
@@ -2131,6 +2230,15 @@ def main() -> int:
         assert_true(
             any("style" in msg.lower() and ("aside" in msg.lower() or "缺少" in msg) for _, msg in unstyled_aside_comp),
             f"组件无 style 的 aside 应失败: {unstyled_aside_comp}",
+        )
+
+        stray_td_comp = lint_theme.lint_html_block(
+            '<td style="font-size:16px;"><p>中文。</p></td>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("style" in msg.lower() and ("p" in msg.lower() or "缺少" in msg or "leaf" in msg.lower()) for _, msg in stray_td_comp),
+            f"游离 td 应被忽略，未加 style 的子节点应失败: {stray_td_comp}",
         )
 
         hyphen_ph = lint_theme.lint_html_block(

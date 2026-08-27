@@ -330,6 +330,40 @@ def is_executable_url(value: str) -> bool:
     return False
 
 
+def strip_css_comments(text: str) -> str:
+    """Remove /* */ comments, leaving delimiters that appear inside quoted strings."""
+    out: list[str] = []
+    i = 0
+    n = len(text or "")
+    quote = None
+    while i < n:
+        ch = text[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            if j == -1:
+                break
+            i = j + 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def decode_css_escapes(text: str) -> str:
     """Decode CSS identifier escapes such as pos\\69 tion → position."""
     out: list[str] = []
@@ -372,7 +406,7 @@ def decode_css_escapes(text: str) -> str:
 
 def normalize_style(style: str) -> str:
     """Strip CSS comments then decode identifier escapes."""
-    return decode_css_escapes(CSS_COMMENT.sub("", style or ""))
+    return decode_css_escapes(strip_css_comments(style or ""))
 
 
 def has_css_declaration(style: str) -> bool:
