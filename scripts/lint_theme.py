@@ -699,6 +699,16 @@ def attr_values(attrs, name: str) -> list[str]:
     return [(value or "") for key, value in attrs if key.lower() == lname]
 
 
+def html_attrs_first(attrs) -> dict[str, str]:
+    """Keep the first occurrence of each attribute, matching HTML tree construction."""
+    out: dict[str, str] = {}
+    for key, value in attrs:
+        lname = (key or "").lower()
+        if lname and lname not in out:
+            out[lname] = value or ""
+    return out
+
+
 def _duplicates(items: list[str]) -> list[str]:
     return sorted({item for item in items if items.count(item) > 1})
 
@@ -1321,7 +1331,7 @@ def _expand_box_sides(parts: list[str]) -> tuple[str, str, str, str] | None:
         return parts[0], parts[1], parts[0], parts[1]
     if len(parts) == 3:
         return parts[0], parts[1], parts[2], parts[1]
-    if len(parts) >= 4:
+    if len(parts) == 4:
         return parts[0], parts[1], parts[2], parts[3]
     return None
 
@@ -1632,7 +1642,7 @@ class _StartTagAttrParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs) -> None:
         if not self.attrs:
-            self.attrs = {key.lower(): (value or "") for key, value in attrs}
+            self.attrs = html_attrs_first(attrs)
 
 
 def html_start_attrs(attr_text: str) -> dict[str, str]:
@@ -1928,7 +1938,7 @@ class _StyleBlockCollector(HTMLParser):
             return
         if ltag == "style":
             self.in_style = True
-            self.cur_attrs = {key.lower(): (value or "") for key, value in attrs}
+            self.cur_attrs = html_attrs_first(attrs)
             self.buf = []
 
     def handle_endtag(self, tag: str) -> None:

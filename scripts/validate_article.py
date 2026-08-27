@@ -662,7 +662,7 @@ def _expand_box_sides(parts: list[str]) -> tuple[str, str, str, str] | None:
         return parts[0], parts[1], parts[0], parts[1]
     if len(parts) == 3:
         return parts[0], parts[1], parts[2], parts[1]
-    if len(parts) >= 4:
+    if len(parts) == 4:
         return parts[0], parts[1], parts[2], parts[3]
     return None
 

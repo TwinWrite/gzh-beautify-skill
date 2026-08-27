@@ -352,6 +352,16 @@ def main() -> int:
         f"后续 margin 简写应覆盖水平 auto: {mor_err}",
     )
 
+    five_margin_root = (
+        '<section style="max-width:677px;margin:0 auto 0 auto bogus;">'
+        f"{body_p('正文。')}</section>"
+    )
+    fmr_err, _, _ = validate_article.validate(five_margin_root)
+    assert_true(
+        any("677" in e or "根 section" in e for e in fmr_err),
+        f"五段 margin 简写应整条忽略: {fmr_err}",
+    )
+
     all_reset_root = (
         '<section style="max-width:677px;margin:0 auto;all:initial;">'
         f"{body_p('正文。')}</section>"
@@ -1745,6 +1755,20 @@ def main() -> int:
             not any("slot:footer" in e for e in pss_err),
             f"type=text/plain 的 style 不应应用 CSS: {pss_err}",
         )
+
+        dup_media_sheet = Path(tmp) / "dup-media-pack"
+        write_mini_theme(dup_media_sheet)
+        dms = (dup_media_sheet / "preview.html").read_text(encoding="utf-8")
+        dms = dms.replace(
+            "</head>",
+            '<style media="screen" media="print">#footer{display:none}</style></head>',
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (dup_media_sheet / "preview.html").write_text(dms, encoding="utf-8")
+        dms_err, _ = lint_theme.lint_theme(dup_media_sheet, schema)
+        assert_has(dms_err, "slot:footer", "重复 media 应保留第一个 screen，隐藏规则应生效")
 
         min_color_sheet = Path(tmp) / "min-color-pack"
         write_mini_theme(min_color_sheet)
