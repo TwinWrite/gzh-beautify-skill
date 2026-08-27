@@ -755,6 +755,18 @@ def main() -> int:
         stub_err, _ = lint_theme.lint_theme(stub_recipe, schema)
         assert_has(stub_err, "tutorial", "仅有单字符说明的配方不算覆盖")
 
+        vague_recipe = Path(tmp) / "vague-recipe-pack"
+        write_mini_theme(vague_recipe)
+        vrd = (vague_recipe / "THEME.md").read_text(encoding="utf-8")
+        for kind in lint_theme.ARTICLE_TYPES:
+            vrd = vrd.replace(
+                f"- `{kind}`: {MINI_RECIPE}\n",
+                f"- `{kind}`: root + 签名槽 + 不要用的槽\n",
+            )
+        (vague_recipe / "THEME.md").write_text(vrd, encoding="utf-8")
+        vrd_err, _ = lint_theme.lint_theme(vague_recipe, schema)
+        assert_has(vrd_err, "tutorial", "仅有「签名槽」「不要用的槽」字样不算配方")
+
         indented_recipe = Path(tmp) / "indented-recipe-pack"
         write_mini_theme(indented_recipe)
         ird = (indented_recipe / "THEME.md").read_text(encoding="utf-8")
@@ -1158,6 +1170,54 @@ def main() -> int:
             f":hover 规则在默认预览下不应隐藏标记: {hvs_err}",
         )
 
+        print_sheet = Path(tmp) / "print-sheet-pack"
+        write_mini_theme(print_sheet)
+        prs = (print_sheet / "preview.html").read_text(encoding="utf-8")
+        prs = prs.replace(
+            "</head>",
+            '<style media="print">#footer{display:none}</style></head>',
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (print_sheet / "preview.html").write_text(prs, encoding="utf-8")
+        prs_err, _ = lint_theme.lint_theme(print_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in prs_err),
+            f"print 样式表不应作用于屏幕预览: {prs_err}",
+        )
+
+        not_hidden_sheet = Path(tmp) / "not-hidden-sheet-pack"
+        write_mini_theme(not_hidden_sheet)
+        nhs = (not_hidden_sheet / "preview.html").read_text(encoding="utf-8")
+        nhs = nhs.replace(
+            "</head>",
+            "<style>#footer:not(.hidden){display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer" class="hidden">slot:footer</p>',
+        )
+        (not_hidden_sheet / "preview.html").write_text(nhs, encoding="utf-8")
+        nhs_err, _ = lint_theme.lint_theme(not_hidden_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in nhs_err),
+            f":not(.hidden) 在 class=hidden 时不应隐藏标记: {nhs_err}",
+        )
+
+        ci_attr_sheet = Path(tmp) / "ci-attr-sheet-pack"
+        write_mini_theme(ci_attr_sheet)
+        cias = (ci_attr_sheet / "preview.html").read_text(encoding="utf-8")
+        cias = cias.replace(
+            "</head>",
+            '<style>[data-label="FOOT" i]{display:none}</style></head>',
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p data-label="foot" data-slot="slot:footer">页脚</p>',
+        )
+        (ci_attr_sheet / "preview.html").write_text(cias, encoding="utf-8")
+        cias_err, _ = lint_theme.lint_theme(ci_attr_sheet, schema)
+        assert_has(cias_err, "slot:footer", "i 修饰符应大小写不敏感匹配属性")
+
         prefix_attr_sheet = Path(tmp) / "prefix-attr-sheet-pack"
         write_mini_theme(prefix_attr_sheet)
         pas = (prefix_attr_sheet / "preview.html").read_text(encoding="utf-8")
@@ -1332,6 +1392,23 @@ def main() -> int:
             f"空 html 围栏不应算作实现: {ef_err}",
         )
 
+        br_hero = Path(tmp) / "br-hero-pack"
+        write_mini_theme(br_hero)
+        bh = (br_hero / "THEME.md").read_text(encoding="utf-8")
+        bh = re.sub(
+            r"### slot:hero\n\n```html\n.*?```\n",
+            "### slot:hero\n\n```html\n<br>\n```\n",
+            bh,
+            count=1,
+            flags=re.S,
+        )
+        (br_hero / "THEME.md").write_text(bh, encoding="utf-8")
+        bh_err, _ = lint_theme.lint_theme(br_hero, schema)
+        assert_true(
+            any("slot:hero" in e and "可用" in e for e in bh_err),
+            f"hero 仅 <br> 不应算作可用内容: {bh_err}",
+        )
+
         incomplete_tag_fence = Path(tmp) / "incomplete-tag-fence-pack"
         write_mini_theme(incomplete_tag_fence)
         itf = (incomplete_tag_fence / "THEME.md").read_text(encoding="utf-8")
@@ -1491,6 +1568,14 @@ def main() -> int:
         (type7_in_para / "THEME.md").write_text(t7p, encoding="utf-8")
         t7p_err, _ = lint_theme.lint_theme(type7_in_para, schema)
         assert_true(not t7p_err, f"段落中的 type-7 标签不应吞掉后续标题: {t7p_err}")
+
+        lazy_indent = Path(tmp) / "lazy-indent-pack"
+        write_mini_theme(lazy_indent)
+        liz = (lazy_indent / "THEME.md").read_text(encoding="utf-8")
+        liz = liz.replace("## 结构模型\n", "前言文字\n    continuation\n<x>\n## 结构模型\n")
+        (lazy_indent / "THEME.md").write_text(liz, encoding="utf-8")
+        liz_err, _ = lint_theme.lint_theme(lazy_indent, schema)
+        assert_true(not liz_err, f"段落缩进续行后的 type-7 不应吞掉标题: {liz_err}")
 
         setext_type7 = Path(tmp) / "setext-type7-pack"
         write_mini_theme(setext_type7)

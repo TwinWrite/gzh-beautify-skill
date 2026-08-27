@@ -77,8 +77,8 @@ RECIPE_SLOT = re.compile(
     r"(?<![a-z0-9_-])(?:" + "|".join(re.escape(s) for s in REQUIRED_SLOTS) + r")(?![a-z0-9_-])",
     re.I,
 )
-RECIPE_SIG = re.compile(r"签名槽|\bsig:|\bsig-[a-z0-9-]+", re.I)
-RECIPE_EXCLUDE = re.compile(r"不要用|不要|排除|不用")
+RECIPE_SIG = re.compile(r"(?:sig:|sig-)[a-z0-9-]+", re.I)
+RECIPE_EXCLUDE_VERB = re.compile(r"不要用|排除|不用")
 HTML_ATTR_NAME = re.compile(r"[A-Za-z_:][A-Za-z0-9_.:-]*")
 EXEC_SCHEME = re.compile(
     r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:|"
@@ -472,7 +472,7 @@ PREVIEW_SKIP_TAGS = {
     "optgroup",
 }
 PREVIEW_FALLBACK_TAGS = {"iframe", "canvas", "object", "video", "audio"}
-STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style>", re.I | re.S)
+STYLE_TAG = re.compile(r"<style\b([^>]*)>(.*?)</style>", re.I | re.S)
 CSS_COMBINATOR = re.compile(r"\s*[>+~]\s*|\s+")
 PREVIEW_MARKER_ATTRS = {"id", "class", "name"}
 PREVIEW_BLOCK_BREAK = {
@@ -548,10 +548,13 @@ def is_indented_code_line(raw: str) -> bool:
     return indent_columns(raw) >= 4
 
 
-def is_paragraph_line(raw: str) -> bool:
+def is_paragraph_line(raw: str, *, in_paragraph: bool = False) -> bool:
     """True when a Markdown line continues or starts a paragraph (not another block)."""
-    if not raw.strip() or is_indented_code_line(raw):
+    if not raw.strip():
         return False
+    if is_indented_code_line(raw):
+        # Indented code cannot interrupt a paragraph (lazy continuation).
+        return in_paragraph
     if ATX_HEADING.match(raw) or MD_LIST.match(raw) or MD_QUOTE.match(raw) or MD_THEMATIC.match(raw):
         return False
     if FENCE_OPEN.match(raw):
@@ -598,9 +601,20 @@ def _duplicates(items: list[str]) -> list[str]:
     return sorted({item for item in items if items.count(item) > 1})
 
 
+def recipe_has_exclude(body: str) -> bool:
+    """True when an exclusion verb is followed by a concrete slot or signature id."""
+    slot_alt = "|".join(re.escape(s) for s in REQUIRED_SLOTS)
+    ident = rf"(?:slot:)?(?:{slot_alt}|sig:[a-z0-9-]+|sig-[a-z0-9-]+)"
+    for match in RECIPE_EXCLUDE_VERB.finditer(body):
+        rest = body[match.end() :]
+        if re.match(rf"\s*`?{ident}", rest, re.I):
+            return True
+    return False
+
+
 def recipe_body_usable(body: str) -> bool:
-    """True when a recipe names core slots, signature slots, and exclusions."""
-    return bool(RECIPE_SLOT.search(body) and RECIPE_SIG.search(body) and RECIPE_EXCLUDE.search(body))
+    """True when a recipe names core slots, a concrete signature id, and an excluded slot."""
+    return bool(RECIPE_SLOT.search(body) and RECIPE_SIG.search(body) and recipe_has_exclude(body))
 
 
 def recipe_entry_ids(section: str) -> set[str]:
@@ -655,6 +669,52 @@ def html_body_has_element(body: str) -> bool:
     except Exception:  # noqa: BLE001
         return False
     return counter.starts > 0
+
+
+ROOT_WRAPPER_TAGS = frozenset({"section", "article", "header", "footer", "main", "nav", "aside"})
+
+
+class _FenceUsableCollector(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tags: list[str] = []
+        self.has_placeholder = False
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        self.tags.append(html_tag_name(tag))
+        for _name, value in attrs:
+            if value and PLACEHOLDER.search(value):
+                self.has_placeholder = True
+
+    def handle_data(self, data: str) -> None:
+        if PLACEHOLDER.search(data or ""):
+            self.has_placeholder = True
+
+
+def html_fence_usable(body: str, kind: str, ident: str) -> bool:
+    """True when a component fence has a placeholder or slot-specific usable content."""
+    visible = strip_html_comments(body)
+    collector = _FenceUsableCollector()
+    try:
+        collector.feed(visible)
+        collector.close()
+    except Exception:  # noqa: BLE001
+        pass
+    if collector.has_placeholder or PLACEHOLDER.search(visible):
+        return True
+    if kind == "sig":
+        return False
+    tags = collector.tags
+    if ident == "root":
+        return any(tag in ROOT_WRAPPER_TAGS for tag in tags)
+    if ident == "divider":
+        return any(tag in {"hr", "br"} for tag in tags)
+    if ident in {"image", "image_gif"}:
+        return "img" in tags
+    return False
 
 
 class _CompletedTagCounter(HTMLParser):
@@ -895,7 +955,7 @@ class HtmlBlockScanner:
             self.in_paragraph = False
         elif self.in_paragraph and is_setext_underline(raw):
             self.in_paragraph = False
-        elif is_paragraph_line(raw):
+        elif is_paragraph_line(raw, in_paragraph=self.in_paragraph):
             self.in_paragraph = True
         else:
             self.in_paragraph = False
@@ -1019,10 +1079,98 @@ def split_selector_list(text: str) -> list[str]:
     return parts
 
 
+class _StartTagAttrParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.attrs: dict[str, str] = {}
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if not self.attrs:
+            self.attrs = {key.lower(): (value or "") for key, value in attrs}
+
+
+def html_start_attrs(attr_text: str) -> dict[str, str]:
+    parser = _StartTagAttrParser()
+    try:
+        parser.feed(f"<style {attr_text}>")
+        parser.close()
+    except Exception:  # noqa: BLE001
+        return {}
+    return parser.attrs
+
+
+_MEDIA_TYPES = frozenset({
+    "all",
+    "screen",
+    "print",
+    "speech",
+    "tty",
+    "tv",
+    "projection",
+    "handheld",
+    "braille",
+    "embossed",
+    "aural",
+})
+
+
+def _split_media_list(text: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(text):
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+        elif ch == "," and depth == 0:
+            piece = text[start:i].strip()
+            if piece:
+                parts.append(piece)
+            start = i + 1
+    piece = text[start:].strip()
+    if piece:
+        parts.append(piece)
+    return parts
+
+
+def media_applies_to_screen(media: str | None) -> bool:
+    """True when a <style media> list applies to a screen preview."""
+    if media is None:
+        return True
+    text = media.strip()
+    if not text:
+        return True
+    for query in _split_media_list(text):
+        q = query.strip().lower()
+        if not q:
+            continue
+        negate = False
+        if q.startswith("only "):
+            q = q[5:].lstrip()
+        elif q.startswith("not "):
+            negate = True
+            q = q[4:].lstrip()
+        match = re.match(r"^([a-z]+)", q)
+        mtype = match.group(1) if match and match.group(1) in _MEDIA_TYPES else "all"
+        matches = mtype in {"all", "screen"}
+        if negate:
+            matches = not matches
+        if matches:
+            return True
+    return False
+
+
 def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[str, bool]]]]:
-    """Selectors from <style> with display/opacity/visibility declarations (hiding or not)."""
+    """Selectors from screen-applied <style> with display/opacity/visibility declarations."""
     rules: list[tuple[str, dict[str, tuple[str, bool]]]] = []
-    for block in STYLE_BLOCK.findall(html or ""):
+    for attr_text, block in STYLE_TAG.findall(html or ""):
+        attrs = html_start_attrs(attr_text)
+        if not media_applies_to_screen(attrs.get("media") if "media" in attrs else None):
+            continue
         css = CSS_COMMENT.sub("", block)
         for match in re.finditer(r"([^{}]+)\{([^{}]+)\}", css):
             decls = winning_style_decls(match.group(2))
@@ -1176,10 +1324,13 @@ def css_specificity(selector: str) -> tuple[int, int, int]:
 
 
 def css_attr_selector_matches(inner: str, ad: dict[str, str]) -> bool:
-    """Match [attr], [attr=val], and ^= $= *= ~= |= operators."""
+    """Match [attr], [attr=val], and ^= $= *= ~= |= operators, with optional i/s flags."""
     spec = inner.strip()
-    if spec.endswith((" i", " I", " s", " S")) and len(spec) > 2:
-        spec = spec[:-2].rstrip()
+    case_insensitive = False
+    flag_m = re.search(r"\s+([iIsS])\s*$", spec)
+    if flag_m:
+        case_insensitive = flag_m.group(1).lower() == "i"
+        spec = spec[: flag_m.start()].rstrip()
     match = re.match(r"^([A-Za-z_:][\w:.-]*)\s*(?:(~=|\|=|\^=|\$=|\*=|=)\s*(.*))?$", spec)
     if not match:
         return False
@@ -1195,20 +1346,26 @@ def css_attr_selector_matches(inner: str, ad: dict[str, str]) -> bool:
     actual = ad.get(name)
     if actual is None:
         return False
+
+    def fold(text: str) -> str:
+        return text.lower() if case_insensitive else text
+
+    actual_c = fold(actual)
+    val_c = fold(val)
     if op == "=":
-        return actual == val
+        return actual_c == val_c
     if not val:
         return False
     if op == "^=":
-        return actual.startswith(val)
+        return actual_c.startswith(val_c)
     if op == "$=":
-        return actual.endswith(val)
+        return actual_c.endswith(val_c)
     if op == "*=":
-        return val in actual
+        return val_c in actual_c
     if op == "~=":
-        return val in actual.split()
+        return val_c in actual_c.split()
     if op == "|=":
-        return actual == val or actual.startswith(val + "-")
+        return actual_c == val_c or actual_c.startswith(val_c + "-")
     return False
 
 
@@ -1246,8 +1403,8 @@ CSS_STATE_PSEUDOS = frozenset({
 })
 
 
-def css_static_pseudos_ok(compound: str) -> bool:
-    """False when the compound has a state pseudo-class the static preview cannot satisfy."""
+def iter_compound_pseudos(compound: str):
+    """Yield (name, arg_or_none, is_element, malformed) for :pseudo / ::pseudo."""
     depth_brack = 0
     quote = None
     i = 0
@@ -1272,26 +1429,103 @@ def css_static_pseudos_ok(compound: str) -> bool:
             depth_brack -= 1
         elif ch == ":" and depth_brack == 0:
             i += 1
+            is_element = False
             if i < n and compound[i] == ":":
+                is_element = True
                 i += 1
-                while i < n and (compound[i].isalnum() or compound[i] == "-"):
-                    i += 1
-                continue
             start = i
             while i < n and (compound[i].isalnum() or compound[i] == "-"):
                 i += 1
             name = compound[start:i].lower()
-            if name in CSS_STATE_PSEUDOS:
-                return False
+            arg = None
+            if i < n and compound[i] == "(":
+                i += 1
+                arg_start = i
+                depth = 1
+                quote2 = None
+                closed = False
+                while i < n and depth:
+                    cj = compound[i]
+                    if quote2:
+                        if cj == "\\" and i + 1 < n:
+                            i += 2
+                            continue
+                        if cj == quote2:
+                            quote2 = None
+                        i += 1
+                        continue
+                    if cj in "\"'":
+                        quote2 = cj
+                    elif cj == "(":
+                        depth += 1
+                    elif cj == ")":
+                        depth -= 1
+                        if depth == 0:
+                            arg = compound[arg_start:i]
+                            i += 1
+                            closed = True
+                            break
+                    i += 1
+                if not closed:
+                    yield name, None, is_element, True
+                    return
+            yield name, arg, is_element, False
             continue
         i += 1
+
+
+def _selector_list_match_state(arg: str, tag: str, attrs) -> bool | None:
+    """True/False when every selector is a simple compound; None if unevaluable."""
+    saw_true = False
+    parts = split_selector_list(arg)
+    if not parts:
+        return None
+    for sel in parts:
+        chain = split_selector_chain(sel)
+        if len(chain) != 1 or chain[0][0]:
+            return None
+        state = css_compound_match_state(chain[0][1], tag, attrs)
+        if state is None:
+            return None
+        if state:
+            saw_true = True
+    return saw_true
+
+
+def css_pseudos_state(compound: str, tag: str, attrs) -> bool | None:
+    """True if all pseudos are satisfied, False if not, None if unevaluable."""
+    for name, arg, is_element, malformed in iter_compound_pseudos(compound):
+        if malformed or is_element:
+            return None
+        if name in CSS_STATE_PSEUDOS:
+            return False
+        if name in {"not", "is", "where"}:
+            if arg is None:
+                return None
+            inner = _selector_list_match_state(arg, tag, attrs)
+            if inner is None:
+                return None
+            if name == "not":
+                if inner:
+                    return False
+            elif not inner:
+                return False
+            continue
+        return None
     return True
 
 
-def css_compound_matches(compound: str, tag: str, attrs) -> bool:
-    if not css_static_pseudos_ok(compound):
-        return False
-    subject = strip_css_pseudos(compound)
+def css_static_pseudos_ok(compound: str) -> bool:
+    """False when the compound has a state pseudo-class the static preview cannot satisfy."""
+    for name, _arg, is_element, malformed in iter_compound_pseudos(compound):
+        if malformed or is_element:
+            return False
+        if name in CSS_STATE_PSEUDOS:
+            return False
+    return True
+
+
+def _css_subject_matches(subject: str, tag: str, attrs) -> bool:
     if not subject:
         return False
     if subject == "*":
@@ -1351,6 +1585,26 @@ def css_compound_matches(compound: str, tag: str, attrs) -> bool:
         else:
             return False
     return True
+
+
+def css_compound_match_state(compound: str, tag: str, attrs) -> bool | None:
+    pseudo = css_pseudos_state(compound, tag, attrs)
+    if pseudo is not True:
+        return pseudo
+    subject = strip_css_pseudos(compound)
+    if subject == "*":
+        return True
+    if subject:
+        return True if _css_subject_matches(subject, tag, attrs) else False
+    names = [name for name, _arg, _el, _bad in iter_compound_pseudos(compound)]
+    if any(name in {"not", "is", "where"} for name in names):
+        return True
+    return False
+
+
+def css_compound_matches(compound: str, tag: str, attrs) -> bool:
+    state = css_compound_match_state(compound, tag, attrs)
+    return state is True
 
 
 def _css_match_chain(
@@ -2106,7 +2360,7 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
         if sorted(unique_sigs) != sorted(unique_sig_ids):
             errors.append("theme.json signature_slots 与 THEME.md ### sig:* 不一致")
 
-        for label, _kind, _ident, region_start, region_end in iter_component_regions(md_source):
+        for label, kind, ident, region_start, region_end in iter_component_regions(md_source):
             fences = [
                 body
                 for body in html_fence_bodies(md_source, region_start, region_end)
@@ -2118,6 +2372,8 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
             if len(fences) > 1:
                 errors.append(f"{label} 应恰好一个 html 代码块，当前 {len(fences)}")
             for body in fences:
+                if not html_fence_usable(body, kind, ident):
+                    errors.append(f"{label} html 代码块缺少可用内容")
                 for level, msg in lint_html_block(body, label):
                     (errors if level == "ERROR" else warnings).append(msg)
 
