@@ -1604,6 +1604,52 @@ def main() -> int:
             f"@supports (display: definitely-invalid) 不应应用内部规则: {bss_err}",
         )
 
+        unknown_prop_supports_sheet = Path(tmp) / "unknown-prop-supports-pack"
+        write_mini_theme(unknown_prop_supports_sheet)
+        ups = (unknown_prop_supports_sheet / "preview.html").read_text(encoding="utf-8")
+        ups = ups.replace(
+            "</head>",
+            "<style>@supports (made-up-prop: value){#footer{display:none}}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (unknown_prop_supports_sheet / "preview.html").write_text(ups, encoding="utf-8")
+        ups_err, _ = lint_theme.lint_theme(unknown_prop_supports_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in ups_err),
+            f"未知属性的 @supports 不应应用内部规则: {ups_err}",
+        )
+
+        layer_cross_sheet = Path(tmp) / "layer-cross-style-pack"
+        write_mini_theme(layer_cross_sheet)
+        lcs = (layer_cross_sheet / "preview.html").read_text(encoding="utf-8")
+        lcs = lcs.replace(
+            "</head>",
+            "<style>@layer a { #footer { display:none !important } }</style>"
+            "<style>@layer b { #footer { display:block !important } }</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (layer_cross_sheet / "preview.html").write_text(lcs, encoding="utf-8")
+        lcs_err, _ = lint_theme.lint_theme(layer_cross_sheet, schema)
+        assert_has(lcs_err, "slot:footer", "跨 <style> 的 @layer 顺序应共用，更早的 important 层应赢")
+
+        nth_last_sheet = Path(tmp) / "nth-last-child-pack"
+        write_mini_theme(nth_last_sheet)
+        nls = (nth_last_sheet / "preview.html").read_text(encoding="utf-8")
+        nls = nls.replace(
+            "</head>",
+            "<style>#footer:nth-last-child(1){display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<div><p>before</p><p id="footer">slot:footer</p></div>',
+        )
+        (nth_last_sheet / "preview.html").write_text(nls, encoding="utf-8")
+        nls_err, _ = lint_theme.lint_theme(nth_last_sheet, schema)
+        assert_has(nls_err, "slot:footer", ":nth-last-child(1) 隐藏的页脚不应算覆盖")
+
         bogus_display_sheet = Path(tmp) / "bogus-display-sheet-pack"
         write_mini_theme(bogus_display_sheet)
         bds = (bogus_display_sheet / "preview.html").read_text(encoding="utf-8")

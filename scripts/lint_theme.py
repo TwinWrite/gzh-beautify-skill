@@ -1743,7 +1743,7 @@ def supports_applies(query: str) -> bool:
     prop = match.group(1).lower()
     raw = match.group(2).strip()
     token = raw.split()[0].lower() if raw else ""
-    return css_decl_value_applies(prop, token)
+    return css_property_applies(prop) and css_decl_value_applies(prop, token)
 
 
 STYLE_SKIP_SUBTREES = frozenset({"template", "script", "noscript"})
@@ -1971,10 +1971,12 @@ def _cascade_layer_beats(important: bool, layer: int | None, other: int | None) 
 def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[str, bool]], int | None]]:
     """Selectors from screen-applied <style> with display/opacity/visibility declarations."""
     rules: list[tuple[str, dict[str, tuple[str, bool]], int | None]] = []
+    layer_state = _new_layer_state()
     for attrs, block in collect_active_style_blocks(html):
-        if not media_applies_to_screen(attrs.get("media") if "media" in attrs else None):
-            continue
-        for selector_text, body, layer_index in iter_css_style_rules(block, active=True):
+        screen = media_applies_to_screen(attrs.get("media") if "media" in attrs else None)
+        for selector_text, body, layer_index in iter_css_style_rules(
+            block, active=screen, layer_state=layer_state
+        ):
             decls = winning_style_decls(body)
             tracked: dict[str, tuple[str, bool]] = {}
             for prop in ("display", "opacity", "visibility"):
@@ -2509,28 +2511,42 @@ def _structural_pseudo_matches(name: str, arg: str | None, tag: str, ctx: dict) 
         return not ancestors
     if name == "first-child":
         return not prev
+    following = ctx.get("following_siblings")
     if name == "last-child":
+        if following is not None:
+            return not following
         if is_last is None:
             return None
         return bool(is_last)
     if name == "only-child":
-        if is_last is None:
+        last = (not following) if following is not None else is_last
+        if last is None:
             return None
-        return (not prev) and bool(is_last)
+        return (not prev) and bool(last)
     if name == "nth-child":
         return _nth_matches(arg, len(prev) + 1)
     if name == "nth-last-child":
-        return None
+        if following is None:
+            return None
+        return _nth_matches(arg, len(following) + 1)
     if name == "first-of-type":
         return not any(item[0] == tag for item in prev)
     if name == "last-of-type":
-        return None
+        if following is None:
+            return None
+        return not any(item[0] == tag for item in following)
     if name == "only-of-type":
-        return None
+        if following is None:
+            return None
+        return (not any(item[0] == tag for item in prev)) and (
+            not any(item[0] == tag for item in following)
+        )
     if name == "nth-of-type":
         return _nth_matches(arg, 1 + sum(1 for item in prev if item[0] == tag))
     if name == "nth-last-of-type":
-        return None
+        if following is None:
+            return None
+        return _nth_matches(arg, 1 + sum(1 for item in following if item[0] == tag))
     return None
 
 
@@ -2716,6 +2732,7 @@ def css_selector_matches(
     *,
     empty: bool | None = None,
     is_last: bool | None = None,
+    following_siblings: list[tuple[str, object]] | None = None,
 ) -> bool:
     """Match a simple CSS selector against the current element and its ancestors."""
     chain = split_selector_chain(selector)
@@ -2730,6 +2747,7 @@ def css_selector_matches(
         "ancestors": ancs,
         "empty": empty,
         "is_last": is_last,
+        "following_siblings": following_siblings,
     }
     return _css_match_chain(compounds, combs, tag, attrs, ancs, prev, ctx)
 
@@ -2834,13 +2852,21 @@ class PreviewMarkerCollector(HTMLParser):
         is_last: bool | None = None,
         ancestors: list | None = None,
         prev_siblings: list | None = None,
+        following_siblings: list | None = None,
     ) -> tuple[bool, bool, bool, bool, str | None, bool]:
         ancestors = list(self.dom_open) if ancestors is None else ancestors
         prev_siblings = list(self.level_children[-1]) if prev_siblings is None else prev_siblings
         winning: dict[str, tuple[str, bool, int | None, tuple[int, int, int], int]] = {}
         for order, (selector, decls, layer_index) in enumerate(self.sheet_hides):
             if not css_selector_matches(
-                selector, tag, attrs, ancestors, prev_siblings, empty=empty, is_last=is_last
+                selector,
+                tag,
+                attrs,
+                ancestors,
+                prev_siblings,
+                empty=empty,
+                is_last=is_last,
+                following_siblings=following_siblings,
             ):
                 continue
             spec = css_specificity(selector)
@@ -2867,6 +2893,38 @@ class PreviewMarkerCollector(HTMLParser):
         vis_tok, vis_imp = winning.get("visibility", ("", False, (0, 0, 0), -1))[:2]
         vis = vis_tok if vis_tok in {"hidden", "collapse", "visible"} else None
         return disp == "none", disp_imp, _opacity_is_zero(opac), opac_imp, vis, vis_imp
+
+    def _sheet_hides_element(self, disp_none: bool, opac0: bool, vis: str | None) -> bool:
+        return disp_none or opac0 or vis in {"hidden", "collapse"}
+
+    def _drop_chunk_range(self, start: int, end: int) -> None:
+        if start < 0:
+            start = 0
+        if end > len(self.chunks):
+            end = len(self.chunks)
+        if start < end:
+            self.chunks = self.chunks[:start] + self.chunks[end:]
+
+    def _hide_children_by_final_siblings(self, parent_meta: dict, siblings: list) -> None:
+        """Re-evaluate reverse-position pseudos once a parent's children are complete."""
+        children = list(parent_meta.get("child_metas") or [])
+        for child in reversed(children):
+            if child.get("skip"):
+                continue
+            idx = len(child.get("prev") or [])
+            following = siblings[idx + 1 :] if idx + 1 <= len(siblings) else []
+            empty = not child.get("had_text") and not child.get("had_element")
+            disp_none, _, opac0, _, vis, _ = self._sheet_hide(
+                child["tag"],
+                child["attrs"],
+                empty=empty,
+                is_last=not following,
+                following_siblings=following,
+                ancestors=child["ancestors"],
+                prev_siblings=child["prev"],
+            )
+            if self._sheet_hides_element(disp_none, opac0, vis):
+                self._drop_chunk_range(child.get("chunk_at", 0), child.get("chunk_end", 0))
 
     def _open(self, tag: str, attrs) -> None:
         ltag = tag.lower()
@@ -2962,6 +3020,7 @@ class PreviewMarkerCollector(HTMLParser):
             "skip": skip,
             "ancestors": parent_anc,
             "prev": prev,
+            "child_metas": [],
         })
         if hard or vis_hidden:
             return
@@ -2980,6 +3039,9 @@ class PreviewMarkerCollector(HTMLParser):
                     self._flush_text()
                 for _, _was_skip, was_hard, opened_closed_details, opened_summary, was_fallback in reversed(self.stack[i:]):
                     meta = self.open_meta.pop() if self.open_meta else None
+                    siblings = list(self.level_children[-1]) if self.level_children else []
+                    if meta:
+                        self._hide_children_by_final_siblings(meta, siblings)
                     if meta and not meta["skip"]:
                         empty = not meta["had_text"] and not meta["had_element"]
                         if empty:
@@ -2990,8 +3052,12 @@ class PreviewMarkerCollector(HTMLParser):
                                 ancestors=meta["ancestors"],
                                 prev_siblings=meta["prev"],
                             )
-                            if disp_none or opac0 or vis in {"hidden", "collapse"}:
+                            if self._sheet_hides_element(disp_none, opac0, vis):
                                 self.chunks = self.chunks[: meta["chunk_at"]]
+                    if meta is not None:
+                        meta["chunk_end"] = len(self.chunks)
+                        if self.open_meta:
+                            self.open_meta[-1].setdefault("child_metas", []).append(meta)
                     if opened_summary and self.details_stack:
                         self.details_stack[-1]["in_summary"] = False
                     if opened_closed_details and self.details_stack:
