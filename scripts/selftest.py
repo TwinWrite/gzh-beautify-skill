@@ -412,6 +412,20 @@ def main() -> int:
         f"无 style 的 article 应失败: {ua_err}",
     )
 
+    unstyled_aside = styled_root('<aside><span leaf="">中文。</span></aside>')
+    uas_err, _, _ = validate_article.validate(unstyled_aside)
+    assert_true(
+        any("style" in e.lower() and ("aside" in e.lower() or "缺少" in e) for e in uas_err),
+        f"无 style 的 aside 应失败: {uas_err}",
+    )
+
+    code_mustache = styled_root(body_p("{{ user.name }}", code=True))
+    _, cm_warn, _ = validate_article.validate(code_mustache)
+    assert_true(
+        not any("占位" in w for w in cm_warn),
+        f"代码里的 {{{{ user.name }}}} 不应当未替换占位: {cm_warn}",
+    )
+
     legacy_image = styled_root(
         '<image style="font-family:monospace;max-width:100%;height:auto;display:block;">'
         + body_p('他说"你好"。')
@@ -766,6 +780,18 @@ def main() -> int:
         (vague_recipe / "THEME.md").write_text(vrd, encoding="utf-8")
         vrd_err, _ = lint_theme.lint_theme(vague_recipe, schema)
         assert_has(vrd_err, "tutorial", "仅有「签名槽」「不要用的槽」字样不算配方")
+
+        bogus_sig_recipe = Path(tmp) / "bogus-sig-recipe-pack"
+        write_mini_theme(bogus_sig_recipe)
+        bsr = (bogus_sig_recipe / "THEME.md").read_text(encoding="utf-8")
+        for kind in lint_theme.ARTICLE_TYPES:
+            bsr = bsr.replace(
+                f"- `{kind}`: {MINI_RECIPE}\n",
+                f"- `{kind}`: hero + paragraph；可用签名槽 sig-does-not-exist；不要用 footer\n",
+            )
+        (bogus_sig_recipe / "THEME.md").write_text(bsr, encoding="utf-8")
+        bsr_err, _ = lint_theme.lint_theme(bogus_sig_recipe, schema)
+        assert_has(bsr_err, "tutorial", "未声明的签名槽 id 不算配方")
 
         indented_recipe = Path(tmp) / "indented-recipe-pack"
         write_mini_theme(indented_recipe)
@@ -1339,6 +1365,51 @@ def main() -> int:
         dbs_err, _ = lint_theme.lint_theme(disabled_sheet, schema)
         assert_has(dbs_err, "slot:footer", ":disabled 在 disabled 元素上应生效并隐藏标记")
 
+        supports_sheet = Path(tmp) / "supports-sheet-pack"
+        write_mini_theme(supports_sheet)
+        sps = (supports_sheet / "preview.html").read_text(encoding="utf-8")
+        sps = sps.replace(
+            "</head>",
+            "<style>@supports (display:block){#footer{display:none}}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (supports_sheet / "preview.html").write_text(sps, encoding="utf-8")
+        sps_err, _ = lint_theme.lint_theme(supports_sheet, schema)
+        assert_has(sps_err, "slot:footer", "@supports (display:block) 内的隐藏规则应生效")
+
+        layer_sheet = Path(tmp) / "layer-sheet-pack"
+        write_mini_theme(layer_sheet)
+        lys = (layer_sheet / "preview.html").read_text(encoding="utf-8")
+        lys = lys.replace(
+            "</head>",
+            "<style>@layer demo { #footer { display:none } }</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (layer_sheet / "preview.html").write_text(lys, encoding="utf-8")
+        lys_err, _ = lint_theme.lint_theme(layer_sheet, schema)
+        assert_has(lys_err, "slot:footer", "@layer 内的隐藏规则应生效")
+
+        invalid_list_sheet = Path(tmp) / "invalid-list-sheet-pack"
+        write_mini_theme(invalid_list_sheet)
+        ils = (invalid_list_sheet / "preview.html").read_text(encoding="utf-8")
+        ils = ils.replace(
+            "</head>",
+            "<style>#footer, :definitely-invalid { display:none }</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (invalid_list_sheet / "preview.html").write_text(ils, encoding="utf-8")
+        ils_err, _ = lint_theme.lint_theme(invalid_list_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in ils_err),
+            f"含无效成员的选择器列表应整条丢弃: {ils_err}",
+        )
+
         stray_td_attr = Path(tmp) / "stray-td-attr-pack"
         write_mini_theme(stray_td_attr)
         sta = (stray_td_attr / "preview.html").read_text(encoding="utf-8")
@@ -1577,7 +1648,7 @@ def main() -> int:
         hbf = (html_block_fence / "THEME.md").read_text(encoding="utf-8")
         hbf = re.sub(
             r"### slot:footer\n\n```html\n.*?```\n",
-            "### slot:footer\n\n<div>\n```html\n<p style=\"font-size:16px;\"><span leaf=\"\">页脚</span></p>\n```\n</div>\n",
+            "### slot:footer\n\n<div>\n```html\n<p style=\"font-size:16px;\"><span leaf=\"\">页脚</span></p>\n```\n</div>\n\n",
             hbf,
             count=1,
             flags=re.S,
@@ -1672,6 +1743,31 @@ def main() -> int:
         assert_true(
             any("结构模型" in e for e in lrt_err),
             f"链接引用定义后 type-7 应吞掉后续标题: {lrt_err}",
+        )
+
+        link_ref_ml = Path(tmp) / "link-ref-multiline-pack"
+        write_mini_theme(link_ref_ml)
+        lrm = (link_ref_ml / "THEME.md").read_text(encoding="utf-8")
+        lrm = lrm.replace("## 结构模型\n", "[foo]:\n  /url\n<x>\n## 结构模型\n")
+        (link_ref_ml / "THEME.md").write_text(lrm, encoding="utf-8")
+        lrm_err, _ = lint_theme.lint_theme(link_ref_ml, schema)
+        assert_true(
+            any("结构模型" in e for e in lrm_err),
+            f"多行链接引用定义后 type-7 应吞掉后续标题: {lrm_err}",
+        )
+
+        html_heading_region = Path(tmp) / "html-heading-region-pack"
+        write_mini_theme(html_heading_region)
+        hhr = (html_heading_region / "THEME.md").read_text(encoding="utf-8")
+        hhr = hhr.replace(
+            "### slot:hero\n\n```html\n",
+            "### slot:hero\n\n<div>\n## raw text\n\n```html\n",
+        )
+        (html_heading_region / "THEME.md").write_text(hhr, encoding="utf-8")
+        hhr_err, _ = lint_theme.lint_theme(html_heading_region, schema)
+        assert_true(
+            not any("slot:hero" in e and "html" in e for e in hhr_err),
+            f"HTML 块里的 ## 不应截断组件区域: {hhr_err}",
         )
 
         setext_type7 = Path(tmp) / "setext-type7-pack"
@@ -2026,6 +2122,15 @@ def main() -> int:
         assert_true(
             any("style" in msg.lower() and ("article" in msg.lower() or "缺少" in msg) for _, msg in unstyled_article_comp),
             f"组件无 style 的 article 应失败: {unstyled_article_comp}",
+        )
+
+        unstyled_aside_comp = lint_theme.lint_html_block(
+            '<aside><span leaf="">{{body}}</span></aside>',
+            "### slot:footer",
+        )
+        assert_true(
+            any("style" in msg.lower() and ("aside" in msg.lower() or "缺少" in msg) for _, msg in unstyled_aside_comp),
+            f"组件无 style 的 aside 应失败: {unstyled_aside_comp}",
         )
 
         hyphen_ph = lint_theme.lint_html_block(

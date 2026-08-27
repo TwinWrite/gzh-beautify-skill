@@ -20,7 +20,7 @@ URL_OR_EMAIL = re.compile(
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
 CODE_STYLE = re.compile(r"monospace|courier|consolas|sf mono", re.I)
 FONT_SIZE = re.compile(r"font-size\s*:\s*(\d+(?:\.\d+)?)px", re.I)
-PLACEHOLDER = re.compile(r"\{\{")
+PLACEHOLDER = re.compile(r"\{\{[a-zA-Z_][a-zA-Z0-9_]*\}\}")
 EXEC_SCHEME = re.compile(
     r"^\s*(?:javascript|vbscript|livescript|mocha)\s*:|"
     r"^\s*data\s*:\s*(?:text\s*/\s*html|text\s*/\s*javascript|application\s*/\s*(?:javascript|ecmascript))",
@@ -212,6 +212,7 @@ BLOCK_NEED_STYLE = {
     "dl",
     "dt",
     "dd",
+    "aside",
 }
 LEAF_BLOCK_TAGS = frozenset({
     "address",

@@ -193,6 +193,7 @@ THEME_NEED_STYLE = {
     "dl",
     "dt",
     "dd",
+    "aside",
 }
 LEAF_BLOCK_TAGS = frozenset({
     "address",
@@ -530,6 +531,7 @@ MD_QUOTE = re.compile(r"^ {0,3}>")
 MD_THEMATIC = re.compile(r"^ {0,3}(?:(?:-[ \t]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})$")
 SETEXT_UNDERLINE = re.compile(r"^ {0,3}(?:=+|-+)\s*$")
 LINK_REF_DEF = re.compile(r"^ {0,3}\[[^\]\n]+\]:\s+\S")
+LINK_REF_DEF_OPEN = re.compile(r"^ {0,3}\[[^\]\n]+\]:\s*$")
 
 
 def indent_columns(raw: str) -> int:
@@ -560,7 +562,7 @@ def is_paragraph_line(raw: str, *, in_paragraph: bool = False) -> bool:
         return False
     if FENCE_OPEN.match(raw):
         return False
-    if not in_paragraph and LINK_REF_DEF.match(raw):
+    if not in_paragraph and (LINK_REF_DEF.match(raw) or LINK_REF_DEF_OPEN.match(raw)):
         return False
     return True
 
@@ -604,23 +606,54 @@ def _duplicates(items: list[str]) -> list[str]:
     return sorted({item for item in items if items.count(item) > 1})
 
 
-def recipe_has_exclude(body: str) -> bool:
-    """True when an exclusion verb is followed by a concrete slot or signature id."""
+def normalize_sig_token(token: str) -> str:
+    text = token.lower().strip("`")
+    if text.startswith("sig:"):
+        text = text[4:]
+    if not text.startswith("sig-"):
+        text = "sig-" + text
+    return text
+
+
+def recipe_has_declared_sig(body: str, sig_ids: set[str]) -> bool:
+    declared = {item.lower() for item in sig_ids}
+    return any(normalize_sig_token(match.group(0)) in declared for match in RECIPE_SIG.finditer(body))
+
+
+def recipe_has_exclude(body: str, *, sig_ids: set[str]) -> bool:
+    """True when an exclusion verb is followed by a declared slot or signature id."""
+    declared_sigs = {item.lower() for item in sig_ids}
     slot_alt = "|".join(re.escape(s) for s in REQUIRED_SLOTS)
-    ident = rf"(?:slot:)?(?:{slot_alt}|sig:[a-z0-9-]+|sig-[a-z0-9-]+)"
     for match in RECIPE_EXCLUDE_VERB.finditer(body):
         rest = body[match.end() :]
-        if re.match(rf"\s*`?{ident}", rest, re.I):
+        found = re.match(
+            rf"\s*`?((?:slot:)?(?:{slot_alt})|sig:[a-z0-9-]+|sig-[a-z0-9-]+)",
+            rest,
+            re.I,
+        )
+        if not found:
+            continue
+        token = found.group(1)
+        low = token.lower()
+        if low.startswith("slot:"):
+            low = low[5:]
+        if low in {s.lower() for s in REQUIRED_SLOTS}:
+            return True
+        if normalize_sig_token(token) in declared_sigs:
             return True
     return False
 
 
-def recipe_body_usable(body: str) -> bool:
-    """True when a recipe names core slots, a concrete signature id, and an excluded slot."""
-    return bool(RECIPE_SLOT.search(body) and RECIPE_SIG.search(body) and recipe_has_exclude(body))
+def recipe_body_usable(body: str, *, sig_ids: set[str]) -> bool:
+    """True when a recipe names core slots, a declared signature id, and an excluded slot."""
+    return bool(
+        RECIPE_SLOT.search(body)
+        and recipe_has_declared_sig(body, sig_ids)
+        and recipe_has_exclude(body, sig_ids=sig_ids)
+    )
 
 
-def recipe_entry_ids(section: str) -> set[str]:
+def recipe_entry_ids(section: str, sig_ids: set[str]) -> set[str]:
     found: set[str] = set()
     for raw in section.splitlines():
         if is_indented_code_line(raw):
@@ -628,18 +661,18 @@ def recipe_entry_ids(section: str) -> set[str]:
         line = raw.strip()
         listed = RECIPE_LIST.match(line)
         if listed:
-            if recipe_body_usable(listed.group(2)):
+            if recipe_body_usable(listed.group(2), sig_ids=sig_ids):
                 found.add(listed.group(1).lower())
             continue
         if line.startswith("|"):
             cells = [cell.strip().strip("`") for cell in line.strip("|").split("|")]
             if cells and re.fullmatch(r"[a-z][a-z0-9_-]*", cells[0], re.I):
                 rest = [cell for cell in cells[1:] if cell and not re.fullmatch(r":?-{3,}:?", cell)]
-                if rest and recipe_body_usable(" ".join(rest)):
+                if rest and recipe_body_usable(" ".join(rest), sig_ids=sig_ids):
                     found.add(cells[0].lower())
             continue
         plain = RECIPE_PLAIN.match(line)
-        if plain and recipe_body_usable(plain.group(2)):
+        if plain and recipe_body_usable(plain.group(2), sig_ids=sig_ids):
             found.add(plain.group(1).lower())
     return found
 
@@ -949,6 +982,7 @@ class HtmlBlockScanner:
         self.until_close: str | None = None
         self.html_block = False
         self.in_paragraph = False
+        self.awaiting_link_dest = False
 
     def _type1_closed(self, raw: str, tag: str) -> bool:
         return bool(re.search(rf"(?i)</{re.escape(tag)}>", raw))
@@ -958,12 +992,21 @@ class HtmlBlockScanner:
             self.in_paragraph = False
         elif self.in_paragraph and is_setext_underline(raw):
             self.in_paragraph = False
+        elif not self.in_paragraph and LINK_REF_DEF_OPEN.match(raw):
+            self.in_paragraph = False
+            self.awaiting_link_dest = True
         elif is_paragraph_line(raw, in_paragraph=self.in_paragraph):
             self.in_paragraph = True
         else:
             self.in_paragraph = False
 
     def in_block(self, raw: str) -> bool:
+        if self.awaiting_link_dest:
+            cont = indent_columns(raw) >= 1 and bool(raw.strip()) and not is_indented_code_line(raw)
+            self.awaiting_link_dest = False
+            if cont:
+                self.in_paragraph = False
+                return False
         if self.type1:
             if self._type1_closed(raw, self.type1):
                 self.type1 = None
@@ -1167,6 +1210,20 @@ def media_applies_to_screen(media: str | None) -> bool:
     return False
 
 
+def supports_applies(query: str) -> bool:
+    """True for simple @supports (property: value) queries a screen browser satisfies."""
+    text = (query or "").strip()
+    if not text:
+        return True
+    lower = text.lower()
+    if lower.startswith("not") and (len(text) == 3 or not text[3].isalnum()):
+        return not supports_applies(text[3:].strip())
+    inner = text
+    if inner.startswith("(") and inner.endswith(")") and inner.count("(") == 1:
+        inner = inner[1:-1].strip()
+    return bool(re.match(r"^[A-Za-z-]+\s*:\s*.+$", inner))
+
+
 STYLE_SKIP_SUBTREES = frozenset({"template", "script", "noscript"})
 FORM_CTRL_TAGS = frozenset({
     "button",
@@ -1302,7 +1359,12 @@ def iter_css_style_rules(css: str, *, active: bool = True):
                         query = prelude[match.end() :].strip() if match else ""
                         inner_active = active and media_applies_to_screen(query)
                         yield from iter_css_style_rules(body, active=inner_active)
-                    elif name in {"layer", "supports", "scope", "container"}:
+                    elif name == "layer":
+                        yield from iter_css_style_rules(body, active=active)
+                    elif name == "supports":
+                        query = prelude[match.end() :].strip() if match else ""
+                        yield from iter_css_style_rules(body, active=active and supports_applies(query))
+                    elif name in {"scope", "container"}:
                         yield from iter_css_style_rules(body, active=False)
                 elif active and prelude:
                     yield prelude, body
@@ -1330,7 +1392,10 @@ def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[
                     tracked[prop] = decls[prop]
             if not tracked:
                 continue
-            for selector in split_selector_list(selector_text):
+            selectors = split_selector_list(selector_text)
+            if not selectors or any(not selector_is_valid(item) for item in selectors):
+                continue
+            for selector in selectors:
                 rules.append((selector, tracked))
     return rules
 
@@ -1580,6 +1645,55 @@ CSS_STATE_PSEUDOS = frozenset({
     "paused",
     "autofill",
 })
+CSS_KNOWN_PSEUDOS = CSS_STATE_PSEUDOS | {
+    "not",
+    "is",
+    "where",
+    "has",
+    "root",
+    "empty",
+    "scope",
+    "defined",
+    "host",
+    "first-child",
+    "last-child",
+    "only-child",
+    "nth-child",
+    "nth-last-child",
+    "first-of-type",
+    "last-of-type",
+    "only-of-type",
+    "nth-of-type",
+    "nth-last-of-type",
+    "first-letter",
+    "first-line",
+    "before",
+    "after",
+    "marker",
+    "selection",
+    "placeholder",
+    "backdrop",
+    "file-selector-button",
+    "link",
+    "any-link",
+    "local-link",
+}
+
+
+def selector_is_valid(selector: str) -> bool:
+    """False when a style-rule selector contains an unknown/malformed pseudo."""
+    chain = split_selector_chain(selector.strip())
+    if not chain:
+        return False
+    for _comb, compound in chain:
+        if not compound:
+            return False
+        for name, _arg, _is_element, malformed in iter_compound_pseudos(compound):
+            if malformed or not name:
+                return False
+            if name not in CSS_KNOWN_PSEUDOS and not name.startswith("-"):
+                return False
+    return True
 
 
 def iter_compound_pseudos(compound: str):
@@ -2264,9 +2378,15 @@ def iter_component_regions(md_text: str):
         nxt = None
         for nxt_match in re.finditer(r"(?m)^#{2,3} ", md_text[region_start:]):
             abs_pos = region_start + nxt_match.start()
-            if _in_spans(abs_pos, spans):
-                nxt = nxt_match
-                break
+            if not _in_spans(abs_pos, spans):
+                continue
+            line = md_text[abs_pos:].splitlines()[0] if md_text[abs_pos:] else ""
+            # Ignore ##/### inside raw HTML, except a later ### slot:/sig: so we
+            # do not steal that component's fence after the HTML block ends.
+            if abs_pos in html_lines and not COMPONENT_HEADING.match(line):
+                continue
+            nxt = nxt_match
+            break
         region_end = region_start + nxt.start() if nxt else len(md_text)
         yield match.group(0).strip(), match.group(1), match.group(2), region_start, region_end
 
@@ -2550,7 +2670,7 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
                 errors.append(f"THEME.md 缺少章节 {heading}")
         recipe = _md_section(structure_md, "## 文章类型配方")
         if recipe is not None:
-            covered = recipe_entry_ids(recipe)
+            covered = recipe_entry_ids(recipe, set(unique_sigs))
             for kind in ARTICLE_TYPES:
                 if kind not in covered:
                     errors.append(f"THEME.md 文章类型配方缺少 {kind}")
