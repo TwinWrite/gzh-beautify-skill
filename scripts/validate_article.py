@@ -409,19 +409,101 @@ def normalize_style(style: str) -> str:
     return decode_css_escapes(strip_css_comments(style or ""))
 
 
-def has_css_declaration(style: str) -> bool:
-    """True when style has at least one property with a non-empty value."""
-    if not style:
-        return False
+CSS_IMPORTANT = re.compile(r"!\s*important\s*$", re.I)
+_CSS_ABS_PX = {
+    "px": 1.0,
+    "pt": 96.0 / 72.0,
+    "pc": 16.0,
+    "in": 96.0,
+    "cm": 96.0 / 2.54,
+    "mm": 96.0 / 25.4,
+    "q": 96.0 / 101.6,
+}
+
+
+def iter_css_declarations(style: str):
     stripped = normalize_style(style)
     for part in stripped.split(";"):
         piece = part.strip()
         if ":" not in piece:
             continue
         prop, value = piece.split(":", 1)
-        if prop.strip() and value.strip():
-            return True
+        prop, value = prop.strip().lower(), value.strip()
+        if prop and value:
+            yield prop, value
+
+
+def has_css_declaration(style: str) -> bool:
+    """True when style has at least one property with a non-empty value."""
+    for _ in iter_css_declarations(style):
+        return True
     return False
+
+
+def winning_style_raw(style: str) -> dict[str, str]:
+    """Winning CSS declarations: prop -> full value (without !important)."""
+    winning: dict[str, tuple[str, bool]] = {}
+    for prop, value in iter_css_declarations(style):
+        important = bool(CSS_IMPORTANT.search(value))
+        raw = CSS_IMPORTANT.sub("", value).strip().lower()
+        prev = winning.get(prop)
+        if prev is not None and prev[1] and not important:
+            continue
+        winning[prop] = (raw, important)
+    return {prop: raw for prop, (raw, _imp) in winning.items()}
+
+
+def _margin_horizontal_auto(vals: dict[str, str]) -> bool:
+    if vals.get("margin-left") == "auto" and vals.get("margin-right") == "auto":
+        return True
+    parts = vals.get("margin", "").split()
+    if len(parts) == 1:
+        return parts[0] == "auto"
+    if len(parts) == 2:
+        return parts[1] == "auto"
+    if len(parts) == 3:
+        return parts[1] == "auto"
+    if len(parts) == 4:
+        return parts[1] == "auto" and parts[3] == "auto"
+    return False
+
+
+def has_root_layout(style: str) -> bool:
+    vals = winning_style_raw(style)
+    mw = re.sub(r"\s+", "", vals.get("max-width", ""))
+    return mw == "677px" and _margin_horizontal_auto(vals)
+
+
+def has_responsive_image_style(style: str) -> bool:
+    vals = winning_style_raw(style)
+    mw = re.sub(r"\s+", "", vals.get("max-width", ""))
+    height = re.sub(r"\s+", "", vals.get("height", ""))
+    display = (vals.get("display", "").split() or [""])[0]
+    return mw == "100%" and height == "auto" and display == "block" and _margin_horizontal_auto(vals)
+
+
+def css_length_px(value: str) -> float | None:
+    text = (value or "").strip().lower()
+    match = re.match(r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)$", text)
+    if not match:
+        return None
+    num = float(match.group(1))
+    unit = match.group(2) or "px"
+    if unit in _CSS_ABS_PX:
+        return num * _CSS_ABS_PX[unit]
+    return None
+
+
+def font_size_limit_hits(style: str) -> list[str]:
+    hits: list[str] = []
+    for prop, value in iter_css_declarations(style):
+        if prop != "font-size":
+            continue
+        token = CSS_IMPORTANT.sub("", value).strip().split()[0] if value.strip() else ""
+        px = css_length_px(token)
+        if px is None or px > 24:
+            hits.append(token)
+    return hits
 
 
 def attr_values(attrs, name: str) -> list[str]:
@@ -467,6 +549,7 @@ class ArticleChecker(HTMLParser):
         self.style_count = 0
         self.styled_root = False
         self.dup_style_count = 0
+        self.img_bad_style = 0
         self.prose_buf: list[str] = []
 
     def _flush_prose(self) -> None:
@@ -567,10 +650,12 @@ class ArticleChecker(HTMLParser):
         effective_style = styles[0] if styles else ""
         if has_css_declaration(effective_style):
             self.style_count += 1
-            if at_root and ltag == "section":
-                self.styled_root = True
         elif ltag in BLOCK_NEED_STYLE:
             self.unstyled_blocks[ltag] += 1
+        if at_root and ltag == "section":
+            self.styled_root = has_root_layout(effective_style)
+        if ltag == "img" and not has_responsive_image_style(effective_style):
+            self.img_bad_style += 1
 
         if "class" in ad:
             self.class_count += 1
@@ -591,9 +676,7 @@ class ArticleChecker(HTMLParser):
             for rx, msg in STYLE_FORBIDDEN:
                 if rx.search(stripped):
                     self.css_hits.append(msg)
-            for size in FONT_SIZE.findall(stripped):
-                if float(size) > 24:
-                    self.font_size_hits.append(size)
+            self.font_size_hits.extend(font_size_limit_hits(style))
 
         is_leaf = ltag == "span" and "leaf" in ad
         is_code = bool(CODE_STYLE.search(normalize_style(effective_style)))
@@ -713,7 +796,14 @@ def validate(html: str) -> tuple[list[str], list[str], int]:
     for msg, n in Counter(checker.css_hits).items():
         errors.append(_count_msg(msg, n))
     if checker.font_size_hits:
-        errors.append(f"font-size {checker.font_size_hits[0]}px 超过 24px")
+        errors.append(f"font-size {checker.font_size_hits[0]} 超过 24px")
+    if checker.img_bad_style:
+        errors.append(
+            _count_msg(
+                "<img> 须含 max-width:100%;height:auto;display:block;margin:0 auto",
+                checker.img_bad_style,
+            )
+        )
 
     if checker.has_document_wrapper:
         errors.append("正文不要包 <html>/<head>/<body>，须为可粘贴片段")
@@ -723,7 +813,7 @@ def validate(html: str) -> tuple[list[str], list[str], int]:
         kinds = ", ".join(t for t, _ in checker.top_level[:6]) or "(空)"
         errors.append(f"正文必须恰好一个顶层 <section> 根节点，当前: {kinds}")
     elif not checker.styled_root:
-        errors.append("根 section 缺少 style")
+        errors.append("根 section 须含 max-width:677px 与水平 margin:0 auto 的 style")
 
     if checker.style_count == 0:
         errors.append("全文没有 inline style，平台只会保留内联样式")

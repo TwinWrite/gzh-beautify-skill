@@ -285,6 +285,54 @@ def main() -> int:
         f"style='/* empty */' 应视为无声明: {ecom_err}",
     )
 
+    color_only_root = (
+        '<section style="color:#000;">'
+        f"{body_p('正文。')}</section>"
+    )
+    cor_err, _, _ = validate_article.validate(color_only_root)
+    assert_true(
+        any("677" in e or "根 section" in e for e in cor_err),
+        f"仅有 color 的根 section 不应算有效布局: {cor_err}",
+    )
+
+    wide_root = (
+        '<section style="max-width:1200px;margin:0 auto;">'
+        f"{body_p('正文。')}</section>"
+    )
+    wr_err, _, _ = validate_article.validate(wide_root)
+    assert_true(
+        any("677" in e or "根 section" in e for e in wr_err),
+        f"max-width:1200px 的根 section 应失败: {wr_err}",
+    )
+
+    bare_img = styled_root(
+        '<img src="https://example.test/a.png" style="color:red;">'
+        + body_p("图。")
+    )
+    bi_err, _, _ = validate_article.validate(bare_img)
+    assert_true(
+        any("img" in e.lower() and "max-width" in e.lower() for e in bi_err),
+        f"仅有 color 的 img 应失败: {bi_err}",
+    )
+
+    pt_size = styled_root(
+        '<p style="font-size:100pt;margin:0 0 16px;color:#1F2937;"><span leaf="">正文。</span></p>'
+    )
+    pts_err, _, _ = validate_article.validate(pt_size)
+    assert_true(
+        any("font-size" in e and "24" in e for e in pts_err),
+        f"font-size:100pt 应超过 24px: {pts_err}",
+    )
+
+    sci_size = styled_root(
+        '<p style="font-size:3e1px;margin:0 0 16px;color:#1F2937;"><span leaf="">正文。</span></p>'
+    )
+    sci_err, _, _ = validate_article.validate(sci_size)
+    assert_true(
+        any("font-size" in e and "24" in e for e in sci_err),
+        f"font-size:3e1px 应超过 24px: {sci_err}",
+    )
+
     png_named = styled_root(
         '<p style="font-size:16px;margin:0 0 16px;color:#1F2937;">'
         '<img src="data:image/png;name=diagram.svg.png;base64,iVBORw0KGgo=" '
@@ -427,7 +475,7 @@ def main() -> int:
     )
 
     legacy_image = styled_root(
-        '<image style="font-family:monospace;max-width:100%;height:auto;display:block;">'
+        '<image style="font-family:monospace;max-width:100%;height:auto;display:block;margin:0 auto;">'
         + body_p('他说"你好"。')
     )
     _, lim_warn, _ = validate_article.validate(legacy_image)
@@ -627,7 +675,7 @@ def main() -> int:
 
     void_code_img = styled_root(
         '<img src="https://example.test/a.png" '
-        'style="font-family:monospace;max-width:100%;height:auto;display:block;">'
+        'style="font-family:monospace;max-width:100%;height:auto;display:block;margin:0 auto;">'
         + body_p('他说"你好"。')
     )
     _, vci_warn, _ = validate_article.validate(void_code_img)
@@ -803,6 +851,18 @@ def main() -> int:
         (bogus_sig_recipe / "THEME.md").write_text(bsr, encoding="utf-8")
         bsr_err, _ = lint_theme.lint_theme(bogus_sig_recipe, schema)
         assert_has(bsr_err, "tutorial", "未声明的签名槽 id 不算配方")
+
+        exclude_only_recipe = Path(tmp) / "exclude-only-recipe-pack"
+        write_mini_theme(exclude_only_recipe)
+        eor = (exclude_only_recipe / "THEME.md").read_text(encoding="utf-8")
+        for kind in lint_theme.ARTICLE_TYPES:
+            eor = eor.replace(
+                f"- `{kind}`: {MINI_RECIPE}\n",
+                f"- `{kind}`: 不要用 footer；不要用 sig-demo-1\n",
+            )
+        (exclude_only_recipe / "THEME.md").write_text(eor, encoding="utf-8")
+        eor_err, _ = lint_theme.lint_theme(exclude_only_recipe, schema)
+        assert_has(eor_err, "tutorial", "排除动词后的 token 不算正选配方")
 
         indented_recipe = Path(tmp) / "indented-recipe-pack"
         write_mini_theme(indented_recipe)
@@ -1421,6 +1481,21 @@ def main() -> int:
             f"无层声明应压过 @layer 内的 display:none: {lls_err}",
         )
 
+        layer_imp_sheet = Path(tmp) / "layer-important-order-pack"
+        write_mini_theme(layer_imp_sheet)
+        lis = (layer_imp_sheet / "preview.html").read_text(encoding="utf-8")
+        lis = lis.replace(
+            "</head>",
+            "<style>@layer a { #footer { display:none !important } } "
+            "@layer b { #footer { display:block !important } }</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (layer_imp_sheet / "preview.html").write_text(lis, encoding="utf-8")
+        lis_err, _ = lint_theme.lint_theme(layer_imp_sheet, schema)
+        assert_has(lis_err, "slot:footer", "important 下更早的 @layer 应赢")
+
         supports_and_sheet = Path(tmp) / "supports-and-sheet-pack"
         write_mini_theme(supports_and_sheet)
         sas = (supports_and_sheet / "preview.html").read_text(encoding="utf-8")
@@ -1434,6 +1509,23 @@ def main() -> int:
         (supports_and_sheet / "preview.html").write_text(sas, encoding="utf-8")
         sas_err, _ = lint_theme.lint_theme(supports_and_sheet, schema)
         assert_has(sas_err, "slot:footer", "@supports (display:block) and (color:red) 内的隐藏规则应生效")
+
+        bogus_supports_sheet = Path(tmp) / "bogus-supports-sheet-pack"
+        write_mini_theme(bogus_supports_sheet)
+        bss = (bogus_supports_sheet / "preview.html").read_text(encoding="utf-8")
+        bss = bss.replace(
+            "</head>",
+            "<style>@supports (display: definitely-invalid){#footer{display:none}}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="footer">slot:footer</p>',
+        )
+        (bogus_supports_sheet / "preview.html").write_text(bss, encoding="utf-8")
+        bss_err, _ = lint_theme.lint_theme(bogus_supports_sheet, schema)
+        assert_true(
+            not any("slot:footer" in e for e in bss_err),
+            f"@supports (display: definitely-invalid) 不应应用内部规则: {bss_err}",
+        )
 
         bogus_display_sheet = Path(tmp) / "bogus-display-sheet-pack"
         write_mini_theme(bogus_display_sheet)
@@ -2281,6 +2373,85 @@ def main() -> int:
         assert_true(
             any("重复" in e or "不重复" in e or "含重复项" in e for e in dup_err),
             f"重复签名槽 id 应失败: {dup_err}",
+        )
+
+        json_array_root = Path(tmp) / "json-array-root-pack"
+        write_mini_theme(json_array_root)
+        (json_array_root / "theme.json").write_text("[]", encoding="utf-8")
+        jar_err, _ = lint_theme.lint_theme(json_array_root, schema)
+        assert_true(
+            any("object" in e.lower() or "应为" in e for e in jar_err),
+            f"theme.json 根数组应报类型错误: {jar_err}",
+        )
+
+        json_scalar_root = Path(tmp) / "json-scalar-root-pack"
+        write_mini_theme(json_scalar_root)
+        (json_scalar_root / "theme.json").write_text('"x"', encoding="utf-8")
+        jsr_err, _ = lint_theme.lint_theme(json_scalar_root, schema)
+        assert_true(
+            any("object" in e.lower() or "应为" in e for e in jsr_err),
+            f"theme.json 根标量应报类型错误: {jsr_err}",
+        )
+
+        color_root_theme = Path(tmp) / "color-root-theme-pack"
+        write_mini_theme(color_root_theme)
+        crm = (color_root_theme / "THEME.md").read_text(encoding="utf-8")
+        crm = crm.replace(
+            'style="max-width:677px;margin:0 auto;background:#FFFFFF;color:#1F2937;"',
+            'style="color:#000;"',
+            1,
+        )
+        (color_root_theme / "THEME.md").write_text(crm, encoding="utf-8")
+        crm_err, _ = lint_theme.lint_theme(color_root_theme, schema)
+        assert_true(
+            any("slot:root" in e and ("677" in e or "margin" in e) for e in crm_err),
+            f"slot:root 仅有 color 应失败: {crm_err}",
+        )
+
+        root_span_theme = Path(tmp) / "root-span-theme-pack"
+        write_mini_theme(root_span_theme)
+        rsm = (root_span_theme / "THEME.md").read_text(encoding="utf-8")
+        rsm = rsm.replace(
+            '<section style="max-width:677px;margin:0 auto;background:#FFFFFF;color:#1F2937;">\n'
+            "  <!-- children -->\n"
+            "</section>",
+            '<span leaf="">{{body}}</span>',
+            1,
+        )
+        (root_span_theme / "THEME.md").write_text(rsm, encoding="utf-8")
+        rsm_err, _ = lint_theme.lint_theme(root_span_theme, schema)
+        assert_true(
+            any("slot:root" in e and "可用内容" in e for e in rsm_err),
+            f"slot:root 仅有 span 应缺少可用内容: {rsm_err}",
+        )
+
+        bad_img_theme = Path(tmp) / "bad-img-theme-pack"
+        write_mini_theme(bad_img_theme)
+        bit = (bad_img_theme / "THEME.md").read_text(encoding="utf-8")
+        bit = bit.replace(
+            "### slot:footer\n\n```html\n"
+            '<p style="margin:0 0 12px;font-size:16px;color:#1F2937;">'
+            '<span leaf="">{{footer}}</span></p>\n```\n',
+            "### slot:footer\n\n```html\n"
+            '<img src="https://example.test/a.png" style="color:red;">\n```\n',
+            1,
+        )
+        (bad_img_theme / "THEME.md").write_text(bit, encoding="utf-8")
+        bit_err, _ = lint_theme.lint_theme(bad_img_theme, schema)
+        assert_true(
+            any("img" in e.lower() and "max-width" in e.lower() for e in bit_err),
+            f"组件里仅有 color 的 img 应失败: {bit_err}",
+        )
+
+        pt_theme = Path(tmp) / "pt-font-theme-pack"
+        write_mini_theme(pt_theme)
+        ptm = (pt_theme / "THEME.md").read_text(encoding="utf-8")
+        ptm = ptm.replace("font-size:16px", "font-size:100pt", 1)
+        (pt_theme / "THEME.md").write_text(ptm, encoding="utf-8")
+        ptm_err, _ = lint_theme.lint_theme(pt_theme, schema)
+        assert_true(
+            any("font-size" in e and "24" in e for e in ptm_err),
+            f"主题 font-size:100pt 应超过 24px: {ptm_err}",
         )
 
         lint_ok = run_cli([sys.executable, str(SCRIPTS / "lint_theme.py"), str(good_dir)])

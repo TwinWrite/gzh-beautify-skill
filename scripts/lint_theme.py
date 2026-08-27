@@ -656,6 +656,21 @@ def normalize_sig_token(token: str) -> str:
     return text
 
 
+def recipe_positive_body(body: str) -> str:
+    """Recipe text with exclusion verb + following slot/sig tokens removed."""
+    slot_alt = "|".join(re.escape(s) for s in REQUIRED_SLOTS)
+    ident = rf"(?:slot:)?(?:{slot_alt})|sig:[a-z0-9-]+|sig-[a-z0-9-]+"
+    pieces: list[str] = []
+    i = 0
+    for match in RECIPE_EXCLUDE_VERB.finditer(body):
+        pieces.append(body[i : match.start()])
+        rest = body[match.end() :]
+        found = re.match(rf"\s*`?(?:{ident})", rest, re.I)
+        i = match.end() + (found.end() if found else 0)
+    pieces.append(body[i:])
+    return "".join(pieces)
+
+
 def recipe_has_declared_sig(body: str, sig_ids: set[str]) -> bool:
     declared = {item.lower() for item in sig_ids}
     return any(normalize_sig_token(match.group(0)) in declared for match in RECIPE_SIG.finditer(body))
@@ -687,9 +702,10 @@ def recipe_has_exclude(body: str, *, sig_ids: set[str]) -> bool:
 
 def recipe_body_usable(body: str, *, sig_ids: set[str]) -> bool:
     """True when a recipe names core slots, a declared signature id, and an excluded slot."""
+    positive = recipe_positive_body(body)
     return bool(
-        RECIPE_SLOT.search(body)
-        and recipe_has_declared_sig(body, sig_ids)
+        RECIPE_SLOT.search(positive)
+        and recipe_has_declared_sig(positive, sig_ids)
         and recipe_has_exclude(body, sig_ids=sig_ids)
     )
 
@@ -803,14 +819,18 @@ class _FenceUsableCollector(HTMLParser):
         self.tags: list[str] = []
         self.has_placeholder = False
         self.stack: list[str] = []
+        self.top_level: list[str] = []
 
     def handle_startendtag(self, tag: str, attrs) -> None:
         self.handle_starttag(tag, attrs)
 
     def handle_starttag(self, tag: str, attrs) -> None:
         ltag = html_tag_name(tag)
+        at_root = not self.stack
         if ltag in TABLE_START and "table" not in self.stack:
             return
+        if at_root:
+            self.top_level.append(ltag)
         self.tags.append(ltag)
         for _name, value in attrs:
             if value and PLACEHOLDER.search(value):
@@ -841,13 +861,13 @@ def html_fence_usable(body: str, kind: str, ident: str) -> bool:
         collector.close()
     except Exception:  # noqa: BLE001
         pass
+    if ident == "root":
+        return collector.top_level == ["section"]
     if collector.has_placeholder or PLACEHOLDER.search(visible):
         return True
     if kind == "sig":
         return False
     tags = collector.tags
-    if ident == "root":
-        return any(tag in ROOT_WRAPPER_TAGS for tag in tags)
     if ident == "divider":
         return any(tag in {"hr", "br"} for tag in tags)
     if ident in {"image", "image_gif"}:
@@ -1072,6 +1092,86 @@ def winning_style_decls(style: str) -> dict[str, tuple[str, bool]]:
             continue
         winning[prop] = (token, important)
     return winning
+
+
+def winning_style_raw(style: str) -> dict[str, str]:
+    """Winning CSS declarations: prop -> full value (without !important)."""
+    winning: dict[str, tuple[str, bool]] = {}
+    for prop, value in iter_css_declarations(style):
+        important = bool(CSS_IMPORTANT.search(value))
+        raw = CSS_IMPORTANT.sub("", value).strip().lower()
+        token = raw.split()[0] if raw else ""
+        if prop in {"display", "opacity", "visibility"} and not css_decl_value_applies(prop, token):
+            continue
+        prev = winning.get(prop)
+        if prev is not None and prev[1] and not important:
+            continue
+        winning[prop] = (raw, important)
+    return {prop: raw for prop, (raw, _imp) in winning.items()}
+
+
+def _margin_horizontal_auto(vals: dict[str, str]) -> bool:
+    if vals.get("margin-left") == "auto" and vals.get("margin-right") == "auto":
+        return True
+    parts = vals.get("margin", "").split()
+    if len(parts) == 1:
+        return parts[0] == "auto"
+    if len(parts) == 2:
+        return parts[1] == "auto"
+    if len(parts) == 3:
+        return parts[1] == "auto"
+    if len(parts) == 4:
+        return parts[1] == "auto" and parts[3] == "auto"
+    return False
+
+
+def has_root_layout(style: str) -> bool:
+    vals = winning_style_raw(style)
+    mw = re.sub(r"\s+", "", vals.get("max-width", ""))
+    return mw == "677px" and _margin_horizontal_auto(vals)
+
+
+def has_responsive_image_style(style: str) -> bool:
+    vals = winning_style_raw(style)
+    mw = re.sub(r"\s+", "", vals.get("max-width", ""))
+    height = re.sub(r"\s+", "", vals.get("height", ""))
+    display = (vals.get("display", "").split() or [""])[0]
+    return mw == "100%" and height == "auto" and display == "block" and _margin_horizontal_auto(vals)
+
+
+_CSS_ABS_PX = {
+    "px": 1.0,
+    "pt": 96.0 / 72.0,
+    "pc": 16.0,
+    "in": 96.0,
+    "cm": 96.0 / 2.54,
+    "mm": 96.0 / 25.4,
+    "q": 96.0 / 101.6,
+}
+
+
+def css_length_px(value: str) -> float | None:
+    text = (value or "").strip().lower()
+    match = re.match(r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)$", text)
+    if not match:
+        return None
+    num = float(match.group(1))
+    unit = match.group(2) or "px"
+    if unit in _CSS_ABS_PX:
+        return num * _CSS_ABS_PX[unit]
+    return None
+
+
+def font_size_limit_hits(style: str) -> list[str]:
+    hits: list[str] = []
+    for prop, value in iter_css_declarations(style):
+        if prop != "font-size":
+            continue
+        token = CSS_IMPORTANT.sub("", value).strip().split()[0] if value.strip() else ""
+        px = css_length_px(token)
+        if px is None or px > 24:
+            hits.append(token)
+    return hits
 
 
 def winning_style_tokens(style: str) -> dict[str, str]:
@@ -1460,7 +1560,13 @@ def supports_applies(query: str) -> bool:
     inner = _unwrap_supports_parens(text)
     if inner != text:
         return supports_applies(inner)
-    return bool(re.match(r"^[A-Za-z-]+\s*:\s*.+$", inner))
+    match = re.match(r"^([A-Za-z-]+)\s*:\s*(.+)$", inner)
+    if not match:
+        return False
+    prop = match.group(1).lower()
+    raw = match.group(2).strip()
+    token = raw.split()[0].lower() if raw else ""
+    return css_decl_value_applies(prop, token)
 
 
 STYLE_SKIP_SUBTREES = frozenset({"template", "script", "noscript"})
@@ -1560,9 +1666,16 @@ def _css_consume_block(text: str, i: int) -> tuple[str, int]:
     return text[start:i], n
 
 
-def iter_css_style_rules(css: str, *, active: bool = True, layered: bool = False):
-    """Yield (selector, body, layered) for style rules in currently active media."""
+def iter_css_style_rules(
+    css: str,
+    *,
+    active: bool = True,
+    layer_index: int | None = None,
+    layer_seq: list[int] | None = None,
+):
+    """Yield (selector, body, layer_index) for style rules in currently active media."""
     text = strip_css_comments(css or "")
+    seq = layer_seq if layer_seq is not None else [0]
     i = 0
     n = len(text)
     while i < n:
@@ -1597,18 +1710,29 @@ def iter_css_style_rules(css: str, *, active: bool = True, layered: bool = False
                     if name == "media":
                         query = prelude[match.end() :].strip() if match else ""
                         inner_active = active and media_applies_to_screen(query)
-                        yield from iter_css_style_rules(body, active=inner_active, layered=layered)
+                        yield from iter_css_style_rules(
+                            body, active=inner_active, layer_index=layer_index, layer_seq=seq
+                        )
                     elif name == "layer":
-                        yield from iter_css_style_rules(body, active=active, layered=True)
+                        idx = seq[0]
+                        seq[0] += 1
+                        yield from iter_css_style_rules(
+                            body, active=active, layer_index=idx, layer_seq=seq
+                        )
                     elif name == "supports":
                         query = prelude[match.end() :].strip() if match else ""
                         yield from iter_css_style_rules(
-                            body, active=active and supports_applies(query), layered=layered
+                            body,
+                            active=active and supports_applies(query),
+                            layer_index=layer_index,
+                            layer_seq=seq,
                         )
                     elif name in {"scope", "container"}:
-                        yield from iter_css_style_rules(body, active=False, layered=layered)
+                        yield from iter_css_style_rules(
+                            body, active=False, layer_index=layer_index, layer_seq=seq
+                        )
                 elif active and prelude:
-                    yield prelude, body, layered
+                    yield prelude, body, layer_index
                 break
             if ch == ";":
                 found = True
@@ -1619,13 +1743,30 @@ def iter_css_style_rules(css: str, *, active: bool = True, layered: bool = False
             break
 
 
-def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[str, bool]], bool]]:
+def _cascade_layer_beats(important: bool, layer: int | None, other: int | None) -> bool | None:
+    """True if `layer` outranks `other` for this importance; None when equal."""
+    if layer == other:
+        return None
+    if important:
+        if layer is None:
+            return False
+        if other is None:
+            return True
+        return layer < other
+    if layer is None:
+        return True
+    if other is None:
+        return False
+    return layer > other
+
+
+def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[str, bool]], int | None]]:
     """Selectors from screen-applied <style> with display/opacity/visibility declarations."""
-    rules: list[tuple[str, dict[str, tuple[str, bool]], bool]] = []
+    rules: list[tuple[str, dict[str, tuple[str, bool]], int | None]] = []
     for attrs, block in collect_active_style_blocks(html):
         if not media_applies_to_screen(attrs.get("media") if "media" in attrs else None):
             continue
-        for selector_text, body, layered in iter_css_style_rules(block, active=True):
+        for selector_text, body, layer_index in iter_css_style_rules(block, active=True):
             decls = winning_style_decls(body)
             tracked: dict[str, tuple[str, bool]] = {}
             for prop in ("display", "opacity", "visibility"):
@@ -1637,7 +1778,7 @@ def extract_stylesheet_hide_rules(html: str) -> list[tuple[str, dict[str, tuple[
             if not selectors or any(not selector_is_valid(item) for item in selectors):
                 continue
             for selector in selectors:
-                rules.append((selector, tracked, layered))
+                rules.append((selector, tracked, layer_index))
     return rules
 
 
@@ -2308,7 +2449,7 @@ def css_selector_matches(
 class PreviewMarkerCollector(HTMLParser):
     """Collect contiguous visible text and intended attributes; skip hidden subtrees."""
 
-    def __init__(self, sheet_hides: list[tuple[str, dict[str, tuple[str, bool]], bool]] | None = None) -> None:
+    def __init__(self, sheet_hides: list[tuple[str, dict[str, tuple[str, bool]], int | None]] | None = None) -> None:
         super().__init__(convert_charrefs=True)
         self.stack: list[tuple[str, bool, bool, bool, bool, bool]] = []
         self.skip_depth = 0
@@ -2398,30 +2539,29 @@ class PreviewMarkerCollector(HTMLParser):
     def _sheet_hide(self, tag: str, attrs) -> tuple[bool, bool, bool, bool, str | None, bool]:
         ancestors = list(self.dom_open)
         prev_siblings = list(self.level_children[-1])
-        winning: dict[str, tuple[str, bool, bool, tuple[int, int, int], int]] = {}
-        for order, (selector, decls, layered) in enumerate(self.sheet_hides):
+        winning: dict[str, tuple[str, bool, int | None, tuple[int, int, int], int]] = {}
+        for order, (selector, decls, layer_index) in enumerate(self.sheet_hides):
             if not css_selector_matches(selector, tag, attrs, ancestors, prev_siblings):
                 continue
             spec = css_specificity(selector)
             for prop, (token, imp) in decls.items():
                 prev = winning.get(prop)
                 if prev is None:
-                    winning[prop] = (token, imp, layered, spec, order)
+                    winning[prop] = (token, imp, layer_index, spec, order)
                     continue
                 _tok, p_imp, p_layer, p_spec, p_ord = prev
                 if imp != p_imp:
                     if imp:
-                        winning[prop] = (token, imp, layered, spec, order)
+                        winning[prop] = (token, imp, layer_index, spec, order)
                     continue
-                if layered != p_layer:
-                    if imp:
-                        if layered:
-                            winning[prop] = (token, imp, layered, spec, order)
-                    elif not layered:
-                        winning[prop] = (token, imp, layered, spec, order)
+                layer_rank = _cascade_layer_beats(imp, layer_index, p_layer)
+                if layer_rank is True:
+                    winning[prop] = (token, imp, layer_index, spec, order)
+                    continue
+                if layer_rank is False:
                     continue
                 if spec > p_spec or (spec == p_spec and order >= p_ord):
-                    winning[prop] = (token, imp, layered, spec, order)
+                    winning[prop] = (token, imp, layer_index, spec, order)
         disp, disp_imp = winning.get("display", ("", False, (0, 0, 0), -1))[:2]
         opac, opac_imp = winning.get("opacity", ("", False, (0, 0, 0), -1))[:2]
         vis_tok, vis_imp = winning.get("visibility", ("", False, (0, 0, 0), -1))[:2]
@@ -2799,6 +2939,7 @@ class ThemeHtmlInspector(HTMLParser):
         self._close_nested_anchor(ltag)
         self._clear_table_stack(ltag)
         ad = {k.lower(): v for k, v in attrs}
+        at_root = not self.stack
         if ltag in FORBIDDEN_THEME_TAGS:
             self._add("ERROR", f"{self.label}: {FORBIDDEN_THEME_TAGS[ltag]}")
         if "class" in ad:
@@ -2811,6 +2952,11 @@ class ThemeHtmlInspector(HTMLParser):
         effective_style = styles[0] if styles else ""
         if ltag in THEME_NEED_STYLE and not has_css_declaration(effective_style):
             self._add("ERROR", f"{self.label}: <{ltag}> 缺少 style")
+        if self.label.strip() == "### slot:root" and at_root and ltag == "section":
+            if not has_root_layout(effective_style):
+                self._add("ERROR", f"{self.label}: 根 section 须含 max-width:677px 与水平 margin:0 auto 的 style")
+        if ltag == "img" and not has_responsive_image_style(effective_style):
+            self._add("ERROR", f"{self.label}: <img> 须含 max-width:100%;height:auto;display:block;margin:0 auto")
         for name, value in attrs:
             lname = name.lower()
             if lname.startswith("on") and len(lname) > 2:
@@ -2825,9 +2971,8 @@ class ThemeHtmlInspector(HTMLParser):
             for rx, msg in THEME_STYLE_CHECKS:
                 if rx.search(stripped):
                     self._add("ERROR", f"{self.label}: {msg}")
-            for size in FONT_SIZE.findall(stripped):
-                if float(size) > 24:
-                    self._add("ERROR", f"{self.label}: font-size {size}px 超过 24px")
+            for token in font_size_limit_hits(style):
+                self._add("ERROR", f"{self.label}: font-size {token} 超过 24px")
             if FOURSIDE_DASHED.search(stripped):
                 self._has_dashed = True
             if CENTERED.search(stripped):
@@ -2929,6 +3074,8 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
 
     for msg in validate_against_schema(data, schema):
         errors.append(f"{json_path.name}: {msg}")
+    if not isinstance(data, dict):
+        return errors, warnings
 
     theme_id = data.get("id")
     if isinstance(theme_id, str):
