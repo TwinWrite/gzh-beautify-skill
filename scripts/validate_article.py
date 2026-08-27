@@ -80,7 +80,7 @@ STYLE_FORBIDDEN = [
     (re.compile(r"@media", re.I), "@media 不支持"),
     (re.compile(r"@keyframes", re.I), "@keyframes 不支持"),
     (re.compile(r"@import", re.I), "@import 不支持"),
-    (re.compile(r"display\s*:\s*grid", re.I), "display:grid 不支持"),
+    (re.compile(r"display\s*:\s*[^;{]*\bgrid\b", re.I), "display:grid 不支持"),
     (re.compile(r"var\s*\(\s*--", re.I), "CSS 变量不支持"),
     (re.compile(r"white-space\s*:\s*pre", re.I), "white-space:pre 会造成大段空白"),
     (re.compile(r"url\s*\(\s*['\"]?https?://[^)]*\.(woff2?|ttf|otf|eot)", re.I), "外链字体不支持"),
@@ -107,6 +107,19 @@ IMPLIED_END_STOP = frozenset({
     "blockquote",
     "html",
     "body",
+})
+HEADING_SCOPE_STOP = frozenset({
+    "html",
+    "body",
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "td",
+    "th",
+    "caption",
+    "template",
 })
 LIST_ITEM_SCOPE_STOP = frozenset({
     "ul",
@@ -523,8 +536,6 @@ def css_decl_value_applies(prop: str, token: str) -> bool:
 def css_property_applies(prop: str) -> bool:
     if prop.startswith("--"):
         return True
-    if prop.startswith("-") and prop.count("-") >= 2:
-        return True
     return prop in CSS_KNOWN_PROPS
 
 
@@ -675,6 +686,61 @@ _MARGIN_KEYWORDS = frozenset({
 })
 
 
+_CSS_LENGTH_UNITS = frozenset({
+    "%",
+    "px",
+    "pt",
+    "pc",
+    "in",
+    "cm",
+    "mm",
+    "q",
+    "em",
+    "rem",
+    "ex",
+    "ch",
+    "ic",
+    "lh",
+    "rlh",
+    "cap",
+    "vw",
+    "vh",
+    "vmin",
+    "vmax",
+    "vb",
+    "vi",
+    "svw",
+    "svh",
+    "lvw",
+    "lvh",
+    "dvw",
+    "dvh",
+    "cqw",
+    "cqh",
+    "cqi",
+    "cqb",
+    "cqmin",
+    "cqmax",
+})
+
+
+def css_length_token_ok(token: str) -> bool:
+    text = (token or "").strip().lower()
+    match = re.fullmatch(
+        r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)",
+        text,
+    )
+    if not match:
+        return False
+    unit = match.group(2)
+    if not unit:
+        try:
+            return float(match.group(1)) == 0
+        except ValueError:
+            return False
+    return unit in _CSS_LENGTH_UNITS
+
+
 def css_margin_side_ok(token: str) -> bool:
     text = (token or "").strip().lower()
     if not text:
@@ -683,10 +749,7 @@ def css_margin_side_ok(token: str) -> bool:
         return True
     if text.startswith("calc(") and text.endswith(")"):
         return True
-    return bool(re.fullmatch(
-        r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:[a-z%]+)?",
-        text,
-    ))
+    return css_length_token_ok(text)
 
 
 def _expand_box_sides(parts: list[str]) -> tuple[str, str, str, str] | None:
@@ -861,6 +924,8 @@ class ArticleChecker(HTMLParser):
     def _implied_close(self, incoming: str) -> None:
         if incoming in P_CLOSING_START:
             self._pop_implied({"p"}, IMPLIED_END_STOP)
+        if incoming in HEADING_TAGS:
+            self._pop_implied(set(HEADING_TAGS), HEADING_SCOPE_STOP)
         targets = set(IMPLIED_END_ON_START.get(incoming, ()))
         if not targets:
             return

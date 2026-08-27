@@ -23,6 +23,8 @@ REQUIRED = lint_theme.REQUIRED_SLOTS
 
 
 def _slot_html(slot: str) -> str:
+    required = lint_theme.SLOT_REQUIRED_PLACEHOLDERS.get(slot)
+    inner = "".join("{{" + name + "}}" for name in sorted(required)) if required else "{{" + slot + "}}"
     if slot == "root":
         return (
             '<section style="max-width:677px;margin:0 auto;background:#FFFFFF;color:#1F2937;">\n'
@@ -45,11 +47,11 @@ def _slot_html(slot: str) -> str:
         return (
             '<section style="margin:0 0 20px;background:#0F172A;border-radius:8px;">'
             '<p style="margin:0;padding:12px;font-family:Consolas,Monaco,monospace;'
-            'font-size:13px;color:#E2E8F0;"><span leaf="">{{line}}</span></p></section>\n'
+            f'font-size:13px;color:#E2E8F0;"><span leaf="">{inner}</span></p></section>\n'
         )
     return (
         '<p style="margin:0 0 12px;font-size:16px;color:#1F2937;">'
-        '<span leaf="">{{' + slot + "}}</span></p>\n"
+        f'<span leaf="">{inner}</span></p>\n'
     )
 
 
@@ -187,6 +189,20 @@ def main() -> int:
     )
     gs_err, _, _ = validate_article.validate(grid_in_style)
     assert_has(gs_err, "grid", "style 里的 display:grid 应报错")
+
+    inline_grid_style = (
+        '<section style="display:inline-grid;max-width:677px;margin:0 auto;">'
+        f"{body_p('正文。')}</section>"
+    )
+    igs_err, _, _ = validate_article.validate(inline_grid_style)
+    assert_has(igs_err, "grid", "style 里的 display:inline-grid 应报错")
+
+    multi_grid_style = (
+        '<section style="display:inline grid;max-width:677px;margin:0 auto;">'
+        f"{body_p('正文。')}</section>"
+    )
+    mgs_err, _, _ = validate_article.validate(multi_grid_style)
+    assert_has(mgs_err, "grid", "style 里的 display:inline grid 应报错")
 
     bare = "<section><p><span leaf=\"\">正文。</span></p></section>"
     b_err, _, _ = validate_article.validate(bare)
@@ -370,6 +386,16 @@ def main() -> int:
     assert_true(
         any("677" in e or "根 section" in e for e in bmr_err),
         f"含无效分量的 margin 简写应整条忽略: {bmr_err}",
+    )
+
+    unknown_unit_margin_root = (
+        '<section style="max-width:677px;margin:1bogus auto;">'
+        f"{body_p('正文。')}</section>"
+    )
+    uum_err, _, _ = validate_article.validate(unknown_unit_margin_root)
+    assert_true(
+        any("677" in e or "根 section" in e for e in uum_err),
+        f"未知单位的 margin 简写应整条忽略: {uum_err}",
     )
 
     all_reset_root = (
@@ -828,7 +854,7 @@ def main() -> int:
         write_mini_theme(unwrap)
         umd = (unwrap / "THEME.md").read_text(encoding="utf-8")
         (unwrap / "THEME.md").write_text(
-            umd.replace('<span leaf="">{{paragraph}}</span>', '<span leaf="">{{label}}</span>{{body}}', 1),
+            umd.replace('<span leaf="">{{body}}</span>', '<span leaf="">{{label}}</span>{{body}}', 1),
             encoding="utf-8",
         )
         uw_err, _ = lint_theme.lint_theme(unwrap, schema)
@@ -1982,6 +2008,78 @@ def main() -> int:
         hps_err, _ = lint_theme.lint_theme(has_pseudo_sheet, schema)
         assert_has(hps_err, "slot:footer", "p:has(span) 隐藏的页脚不应算覆盖")
 
+        defined_pseudo_sheet = Path(tmp) / "defined-pseudo-pack"
+        write_mini_theme(defined_pseudo_sheet)
+        dps = (defined_pseudo_sheet / "preview.html").read_text(encoding="utf-8")
+        dps = dps.replace(
+            "</head>",
+            "<style>p:defined{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="preview-slot-footer">slot:footer</p>',
+        )
+        (defined_pseudo_sheet / "preview.html").write_text(dps, encoding="utf-8")
+        dps_err, _ = lint_theme.lint_theme(defined_pseudo_sheet, schema)
+        assert_has(dps_err, "slot:footer", "p:defined 隐藏的页脚不应算覆盖")
+
+        scope_sheet = Path(tmp) / "scope-sheet-pack"
+        write_mini_theme(scope_sheet)
+        scs = (scope_sheet / "preview.html").read_text(encoding="utf-8")
+        scs = scs.replace(
+            "</head>",
+            "<style>@scope (body) { #preview-slot-footer { display:none } }</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="preview-slot-footer">slot:footer</p>',
+        )
+        (scope_sheet / "preview.html").write_text(scs, encoding="utf-8")
+        scs_err, _ = lint_theme.lint_theme(scope_sheet, schema)
+        assert_has(scs_err, "slot:footer", "@scope (body) 内的隐藏规则应生效")
+
+        range_media_sheet = Path(tmp) / "range-media-pack"
+        write_mini_theme(range_media_sheet)
+        rms = (range_media_sheet / "preview.html").read_text(encoding="utf-8")
+        rms = rms.replace(
+            "</head>",
+            "<style>@media (width >= 0px) { #preview-slot-footer { display:none } }</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<p id="preview-slot-footer">slot:footer</p>',
+        )
+        (range_media_sheet / "preview.html").write_text(rms, encoding="utf-8")
+        rms_err, _ = lint_theme.lint_theme(range_media_sheet, schema)
+        assert_has(rms_err, "slot:footer", "@media (width >= 0px) 内的隐藏规则应生效")
+
+        heading_close_sheet = Path(tmp) / "heading-close-pack"
+        write_mini_theme(heading_close_sheet)
+        hcs = (heading_close_sheet / "preview.html").read_text(encoding="utf-8")
+        hcs = hcs.replace(
+            "</head>",
+            "<style>body > #preview-slot-footer{display:none}</style></head>",
+        ).replace(
+            "<p>slot:footer</p>",
+            '<h1><h2 id="preview-slot-footer">slot:footer</h2></h1>',
+        )
+        (heading_close_sheet / "preview.html").write_text(hcs, encoding="utf-8")
+        hcs_err, _ = lint_theme.lint_theme(heading_close_sheet, schema)
+        assert_has(hcs_err, "slot:footer", "后出现的标题应闭合前一标题，使 h2 成为 body 子节点")
+
+        vendor_prop_comp = lint_theme.lint_html_block(
+            '<p style="-made-up-prop:value"><span leaf="">正文。</span></p>',
+            "### slot:paragraph",
+        )
+        assert_true(
+            any("style" in msg.lower() or "缺少" in msg for _, msg in vendor_prop_comp),
+            f"仅有任意 vendor 前缀声明的组件应缺少有效 style: {vendor_prop_comp}",
+        )
+
+        wrong_ph = lint_theme.html_fence_usable(
+            '<p style="color:red"><span leaf="">{{title}}</span></p>',
+            "slot",
+            "paragraph",
+        )
+        assert_true(not wrong_ph, "paragraph 仅有 {{title}} 不应算可用")
+
         footer_extra_preview = Path(tmp) / "footer-extra-preview-pack"
         write_mini_theme(footer_extra_preview)
         fep = (footer_extra_preview / "preview.html").read_text(encoding="utf-8")
@@ -2691,7 +2789,7 @@ def main() -> int:
         uc = (unstyled_comp / "THEME.md").read_text(encoding="utf-8")
         uc = re.sub(
             r"### slot:footer\n\n```html\n.*?```\n",
-            "### slot:footer\n\n```html\n<p><span leaf=\"\">{{footer}}</span></p>\n```\n",
+            "### slot:footer\n\n```html\n<p><span leaf=\"\">{{author}}{{bio}}</span></p>\n```\n",
             uc,
             count=1,
             flags=re.S,
@@ -2917,7 +3015,7 @@ def main() -> int:
         bit = bit.replace(
             "### slot:footer\n\n```html\n"
             '<p style="margin:0 0 12px;font-size:16px;color:#1F2937;">'
-            '<span leaf="">{{footer}}</span></p>\n```\n',
+            '<span leaf="">{{author}}{{bio}}</span></p>\n```\n',
             "### slot:footer\n\n```html\n"
             '<img src="https://example.test/a.png" style="color:red;">\n```\n',
             1,

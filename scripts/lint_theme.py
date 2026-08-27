@@ -38,6 +38,32 @@ REQUIRED_SLOTS = [
     "footer",
 ]
 
+SLOT_REQUIRED_PLACEHOLDERS = {
+    "hero": frozenset({"kicker", "title", "subtitle", "date"}),
+    "toc": frozenset({"item1", "item2", "item3"}),
+    "h2": frozenset({"n", "en_label", "title"}),
+    "h3": frozenset({"title"}),
+    "h3_label": frozenset({"title"}),
+    "paragraph": frozenset({"body"}),
+    "strong": frozenset({"phrase"}),
+    "mark": frozenset({"phrase"}),
+    "underline": frozenset({"phrase"}),
+    "strike": frozenset({"phrase"}),
+    "code_inline": frozenset({"phrase"}),
+    "blockquote": frozenset({"body"}),
+    "callout_tip": frozenset({"label", "body"}),
+    "callout_warn": frozenset({"label", "body"}),
+    "quote_pull": frozenset({"body"}),
+    "ul": frozenset({"item"}),
+    "ol": frozenset({"n", "item"}),
+    "code_dark": frozenset({"lang", "line"}),
+    "code_light": frozenset({"lang", "line"}),
+    "image": frozenset({"src", "alt", "caption"}),
+    "image_gif": frozenset({"src", "alt", "caption"}),
+    "media_ph": frozenset({"body"}),
+    "footer": frozenset({"author", "bio"}),
+}
+
 REQUIRED_MD_HEADINGS = [
     "## 结构模型",
     "## 设计变量",
@@ -69,6 +95,7 @@ HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
 CJK = re.compile(r"[一-鿿㐀-䶿]")
 PLACEHOLDER = re.compile(r"\{\{")
+PLACEHOLDER_NAME = re.compile(r"\{\{\s*([A-Za-z_][\w.-]*)\s*\}\}")
 SCHEME_IGNORED = re.compile(r"[\x00-\x20\x7f]+")
 PREVIEW_ID_TAIL = re.compile(r"[a-zA-Z0-9_-]")
 RECIPE_LIST = re.compile(r"^(?:[-*+]|\d+[.)])\s+`?([a-z][a-z0-9_-]*)`?\s*[:：]\s*(\S.*)$", re.I)
@@ -359,6 +386,19 @@ IMPLIED_END_STOP = frozenset({
     "html",
     "body",
 })
+HEADING_SCOPE_STOP = frozenset({
+    "html",
+    "body",
+    "table",
+    "thead",
+    "tbody",
+    "tfoot",
+    "tr",
+    "td",
+    "th",
+    "caption",
+    "template",
+})
 LIST_ITEM_SCOPE_STOP = frozenset({
     "ul",
     "ol",
@@ -436,7 +476,7 @@ TABLE_CONTEXT = frozenset({
 THEME_STYLE_CHECKS = [
     (re.compile(r"position\s*:\s*(fixed|absolute|sticky)", re.I), "禁止 position fixed/absolute/sticky"),
     (re.compile(r"float\s*:", re.I), "禁止 float"),
-    (re.compile(r"display\s*:\s*grid", re.I), "禁止 display:grid"),
+    (re.compile(r"display\s*:\s*[^;{]*\bgrid\b", re.I), "禁止 display:grid"),
     (re.compile(r"var\s*\(\s*--", re.I), "禁止 CSS 变量"),
     (re.compile(r"@(media|keyframes|import)", re.I), "禁止 @media/@keyframes/@import"),
     (re.compile(r"white-space\s*:\s*pre", re.I), "禁止 white-space:pre，代码块请逐行 <p>"),
@@ -894,6 +934,7 @@ class _FenceUsableCollector(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.tags: list[str] = []
         self.has_placeholder = False
+        self.placeholders: set[str] = set()
         self.stack: list[str] = []
         self.top_level: list[str] = []
 
@@ -927,6 +968,8 @@ class _FenceUsableCollector(HTMLParser):
             return
         if PLACEHOLDER.search(data or ""):
             self.has_placeholder = True
+        for match in PLACEHOLDER_NAME.finditer(data or ""):
+            self.placeholders.add(match.group(1))
 
 
 def html_fence_usable(body: str, kind: str, ident: str) -> bool:
@@ -940,8 +983,11 @@ def html_fence_usable(body: str, kind: str, ident: str) -> bool:
         pass
     if ident == "root":
         return collector.top_level == ["section"]
-    if collector.has_placeholder:
-        return True
+    required = SLOT_REQUIRED_PLACEHOLDERS.get(ident) if kind == "slot" else None
+    if required is not None:
+        return required <= collector.placeholders
+    if collector.placeholders or collector.has_placeholder:
+        return kind == "sig" or ident == "table"
     if kind == "sig":
         return False
     tags = collector.tags
@@ -1100,8 +1146,6 @@ def css_decl_value_applies(prop: str, token: str) -> bool:
 
 def css_property_applies(prop: str) -> bool:
     if prop.startswith("--"):
-        return True
-    if prop.startswith("-") and prop.count("-") >= 2:
         return True
     return prop in CSS_KNOWN_PROPS
 
@@ -1342,6 +1386,62 @@ _MARGIN_KEYWORDS = frozenset({
 })
 
 
+_CSS_LENGTH_UNITS = frozenset({
+    "%",
+    "px",
+    "pt",
+    "pc",
+    "in",
+    "cm",
+    "mm",
+    "q",
+    "em",
+    "rem",
+    "ex",
+    "ch",
+    "ic",
+    "lh",
+    "rlh",
+    "cap",
+    "vw",
+    "vh",
+    "vmin",
+    "vmax",
+    "vb",
+    "vi",
+    "svw",
+    "svh",
+    "lvw",
+    "lvh",
+    "dvw",
+    "dvh",
+    "cqw",
+    "cqh",
+    "cqi",
+    "cqb",
+    "cqmin",
+    "cqmax",
+})
+
+
+def css_length_token_ok(token: str) -> bool:
+    """True when a token is 0 or a number with a known CSS length unit."""
+    text = (token or "").strip().lower()
+    match = re.fullmatch(
+        r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([a-z%]*)",
+        text,
+    )
+    if not match:
+        return False
+    unit = match.group(2)
+    if not unit:
+        try:
+            return float(match.group(1)) == 0
+        except ValueError:
+            return False
+    return unit in _CSS_LENGTH_UNITS
+
+
 def css_margin_side_ok(token: str) -> bool:
     """True when a margin longhand/shorthand component is a complete valid value."""
     text = (token or "").strip().lower()
@@ -1351,10 +1451,7 @@ def css_margin_side_ok(token: str) -> bool:
         return True
     if text.startswith("calc(") and text.endswith(")"):
         return True
-    return bool(re.fullmatch(
-        r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?(?:[a-z%]+)?",
-        text,
-    ))
+    return css_length_token_ok(text)
 
 
 def _expand_box_sides(parts: list[str]) -> tuple[str, str, str, str] | None:
@@ -1797,10 +1894,77 @@ def _media_features_apply(text: str) -> bool:
     inner = _unwrap_supports_parens(q)
     if inner != q:
         return _media_features_apply(inner)
+    ranged = _media_range_applies(inner.strip())
+    if ranged is not None:
+        return ranged
     match = re.match(r"^([a-z-]+)\s*(?::\s*(.+))?$", inner.strip(), re.I)
     if not match:
         return False
     return _media_feature_applies(match.group(1).lower(), (match.group(2) or "").strip())
+
+
+def _media_compare(left: float, op: str, right: float) -> bool:
+    if op == ">=":
+        return left >= right
+    if op == "<=":
+        return left <= right
+    if op == ">":
+        return left > right
+    if op == "<":
+        return left < right
+    if op == "=":
+        return abs(left - right) < 0.5
+    return False
+
+
+def _media_feature_actual(name: str) -> float | None:
+    vw, vh = _PREVIEW_VIEWPORT_PX
+    if name in {"width", "device-width"}:
+        return vw
+    if name in {"height", "device-height"}:
+        return vh
+    return None
+
+
+def _media_range_applies(inner: str) -> bool | None:
+    """True/False for MQ range syntax; None when the text is not a range."""
+    text = inner.strip()
+    chained = re.match(
+        r"^(.+?)\s*(<=|>=|<|>|=)\s*([a-z-]+)\s*(<=|>=|<|>|=)\s*(.+)$",
+        text,
+        re.I,
+    )
+    if chained:
+        left_val, left_op, name, right_op, right_val = chained.groups()
+        actual = _media_feature_actual(name.lower())
+        if actual is None:
+            return False
+        left_px = css_length_px(left_val.strip())
+        right_px = css_length_px(right_val.strip())
+        if left_px is None or right_px is None:
+            return False
+        return _media_compare(left_px, left_op, actual) and _media_compare(actual, right_op, right_px)
+    named = re.match(r"^([a-z-]+)\s*(<=|>=|<|>|=)\s*(.+)$", text, re.I)
+    if named:
+        name, op, val = named.groups()
+        if name.lower() not in _MEDIA_FEATURES:
+            return False
+        actual = _media_feature_actual(name.lower())
+        px = css_length_px(val.strip())
+        if actual is None or px is None:
+            return False
+        return _media_compare(actual, op, px)
+    valued = re.match(r"^(.+?)\s*(<=|>=|<|>|=)\s*([a-z-]+)$", text, re.I)
+    if valued:
+        val, op, name = valued.groups()
+        if name.lower() not in _MEDIA_FEATURES:
+            return False
+        actual = _media_feature_actual(name.lower())
+        px = css_length_px(val.strip())
+        if actual is None or px is None:
+            return False
+        return _media_compare(px, op, actual)
+    return None
 
 
 def _media_feature_applies(name: str, value: str) -> bool:
@@ -2147,7 +2311,11 @@ def iter_css_style_rules(
                             layer_index=layer_index,
                             layer_state=state,
                         )
-                    elif name in {"scope", "container"}:
+                    elif name == "scope":
+                        yield from iter_css_style_rules(
+                            body, active=active, layer_index=layer_index, layer_state=state
+                        )
+                    elif name in {"container"}:
                         yield from iter_css_style_rules(
                             body, active=False, layer_index=layer_index, layer_state=state
                         )
@@ -2896,6 +3064,10 @@ def css_pseudos_state(compound: str, tag: str, attrs, *, ctx: dict | None = None
             if has_state is False:
                 return False
             return None
+        if name == "defined":
+            if "-" in tag:
+                return False
+            continue
         if name in CSS_STATE_PSEUDOS or name in {"link", "any-link"}:
             attr_state = css_attr_pseudo_matches(name, tag, attrs)
             if attr_state is True:
@@ -3179,6 +3351,8 @@ class PreviewMarkerCollector(HTMLParser):
     def _implied_close(self, incoming: str) -> None:
         if incoming in P_CLOSING_START:
             self._pop_implied({"p"}, IMPLIED_END_STOP)
+        if incoming in HEADING_TAGS:
+            self._pop_implied(set(HEADING_TAGS), HEADING_SCOPE_STOP)
         targets = set(IMPLIED_END_ON_START.get(incoming, ()))
         if not targets:
             return
@@ -3721,6 +3895,8 @@ class ThemeHtmlInspector(HTMLParser):
     def _implied_close(self, incoming: str) -> None:
         if incoming in P_CLOSING_START:
             self._pop_implied({"p"}, IMPLIED_END_STOP)
+        if incoming in HEADING_TAGS:
+            self._pop_implied(set(HEADING_TAGS), HEADING_SCOPE_STOP)
         targets = set(IMPLIED_END_ON_START.get(incoming, ()))
         if not targets:
             return
