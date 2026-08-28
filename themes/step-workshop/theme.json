@@ -1,0 +1,101 @@
+{
+  "id": "step-workshop",
+  "name": "步骤工坊",
+  "version": 1,
+  "description": "教程工坊气质：编号章节、柔阴影卡片、短卡连发。适合操作说明与清单。",
+  "structure_model": {
+    "voice": "explainer",
+    "density": "packed",
+    "heading": "numbered-chapter",
+    "surface": "soft-card",
+    "rhythm": "staccato"
+  },
+  "tokens": {
+    "color": {
+      "page": "#FFFFFF",
+      "ink": "#1A2332",
+      "ink_muted": "#4B5563",
+      "brand": "#0F766E",
+      "brand_soft": "#E6F4F1",
+      "brand_ink": "#115E59",
+      "accent": "#D97706",
+      "rule": "#E2E8F0",
+      "underline": "#5EEAD4"
+    },
+    "type": {
+      "stack": "sans",
+      "body_size": "15px",
+      "body_line_height": "1.75",
+      "max_title_size": "20px"
+    },
+    "shape": {
+      "radius": "12px",
+      "shadow": "0 1px 4px rgba(15,118,110,0.10)"
+    },
+    "layout": {
+      "max_width": "677px",
+      "gutter": "20px"
+    }
+  },
+  "underline_css": "border-bottom:2px solid #5EEAD4;font-weight:600;",
+  "tags": {
+    "craft": [
+      "编号",
+      "卡片",
+      "清单"
+    ],
+    "mood": [
+      "利落",
+      "可执行"
+    ],
+    "scenes": [
+      "教程",
+      "工具说明",
+      "清单"
+    ]
+  },
+  "slots": [
+    "root",
+    "hero",
+    "toc",
+    "h2",
+    "h3",
+    "h3_label",
+    "paragraph",
+    "divider",
+    "strong",
+    "mark",
+    "underline",
+    "strike",
+    "code_inline",
+    "blockquote",
+    "callout_tip",
+    "callout_warn",
+    "quote_pull",
+    "ul",
+    "ol",
+    "table",
+    "code_dark",
+    "code_light",
+    "image",
+    "image_gif",
+    "media_ph",
+    "footer"
+  ],
+  "signature_slots": [
+    "step-rail",
+    "param-chip",
+    "checklist-row",
+    "chapter-badge",
+    "tool-strip",
+    "outcome-card",
+    "do-dont",
+    "recipe-head",
+    "progress-note",
+    "pitfall-flag"
+  ],
+  "files": {
+    "library": "THEME.md",
+    "preview": "preview.html"
+  }
+}
