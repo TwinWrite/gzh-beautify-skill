@@ -1,0 +1,101 @@
+{
+  "id": "moss-zen",
+  "name": "苔色留白",
+  "version": 1,
+  "description": "禅意留白气质：大段距、居中衬线金句、1px 细线。适合随笔与极简生活稿。",
+  "structure_model": {
+    "voice": "journal",
+    "density": "sparse",
+    "heading": "masthead",
+    "surface": "paper",
+    "rhythm": "long-breath"
+  },
+  "tokens": {
+    "color": {
+      "page": "#F7F6F2",
+      "ink": "#2C2A26",
+      "ink_muted": "#5C5B56",
+      "brand": "#3E5348",
+      "brand_soft": "#E8EDE9",
+      "brand_ink": "#2F4038",
+      "accent": "#8B7355",
+      "rule": "#E4E1D8",
+      "underline": "#C5D0C8"
+    },
+    "type": {
+      "stack": "serif",
+      "body_size": "16px",
+      "body_line_height": "1.9",
+      "max_title_size": "22px"
+    },
+    "shape": {
+      "radius": "0px",
+      "shadow": "none"
+    },
+    "layout": {
+      "max_width": "677px",
+      "gutter": "20px"
+    }
+  },
+  "underline_css": "border-bottom:2px solid #C5D0C8;font-weight:600;",
+  "tags": {
+    "craft": [
+      "留白",
+      "居中",
+      "细线"
+    ],
+    "mood": [
+      "静",
+      "疏"
+    ],
+    "scenes": [
+      "随笔",
+      "生活",
+      "禅意"
+    ]
+  },
+  "slots": [
+    "root",
+    "hero",
+    "toc",
+    "h2",
+    "h3",
+    "h3_label",
+    "paragraph",
+    "divider",
+    "strong",
+    "mark",
+    "underline",
+    "strike",
+    "code_inline",
+    "blockquote",
+    "callout_tip",
+    "callout_warn",
+    "quote_pull",
+    "ul",
+    "ol",
+    "table",
+    "code_dark",
+    "code_light",
+    "image",
+    "image_gif",
+    "media_ph",
+    "footer"
+  ],
+  "signature_slots": [
+    "breath-gap",
+    "centered-verse",
+    "moss-rule",
+    "ink-dot",
+    "quiet-kicker",
+    "wide-quote",
+    "still-aside",
+    "date-seal",
+    "leaf-mark",
+    "colophon-zen"
+  ],
+  "files": {
+    "library": "THEME.md",
+    "preview": "preview.html"
+  }
+}

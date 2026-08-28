@@ -68,6 +68,7 @@ themes/{id}/
 ```bash
 python3 scripts/selftest.py
 python3 scripts/lint_theme.py themes              # 空目录也通过
+python3 scripts/lint_theme.py examples/themes     # 若有冒烟示例
 python3 scripts/validate_article.py --strict out.html
 python3 scripts/wrap_preview.py out.html
 ```
@@ -83,6 +84,7 @@ gzh-beautify-skill/
 ├── references/          # 约束、契约、工厂、渲染合同
 ├── scripts/             # 校验与预览
 ├── assets/              # 预览壳、试排稿
+├── examples/themes/     # 工厂冒烟示例（不参与渲染发现）
 └── themes/              # 生产输出（默认空）
 ```
 

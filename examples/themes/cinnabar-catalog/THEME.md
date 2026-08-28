@@ -151,13 +151,13 @@
 ### slot:image
 
 ```html
-<figure style="margin:0 0 16px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:6px 0 0;font-size:12px;color:#5C4E44;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span><span leaf="">{{alt}}</span><span leaf="">{{src}}</span></figcaption></figure>
+<figure style="margin:0 0 16px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:6px 0 0;font-size:12px;color:#5C4E44;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span></figcaption></figure>
 ```
 
 ### slot:image_gif
 
 ```html
-<figure style="margin:0 0 16px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:6px 0 0;font-size:12px;color:#5C4E44;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span><span leaf="">{{alt}}</span><span leaf="">{{src}}</span></figcaption></figure>
+<figure style="margin:0 0 16px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:6px 0 0;font-size:12px;color:#5C4E44;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span></figcaption></figure>
 ```
 
 ### slot:media_ph
@@ -237,12 +237,12 @@
 ## 文章骨架
 
 1. `root` 打开
-2. `stamp-mast`
+2. `stamp-mast`（可选）
 3. `hero`
 4. `toc`（封面后的目次框）
 5. `count-pill`（可选）
 6. 章节循环：`h2` → `item-ticket` / 段落
-7. `seal-end`
+7. `seal-end`（可选）
 8. `footer`
 9. `root` 关闭
 

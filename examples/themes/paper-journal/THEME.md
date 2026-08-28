@@ -139,7 +139,7 @@
 ### slot:code_dark
 
 ```html
-<section style="margin:0 0 20px;background:#3F2E22;padding:12px 0;"><p style="margin:0;padding:3px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#F3E6D4;color:#C4A574;"><span leaf="">{{lang}}</span></p><p style="margin:0;padding:3px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#F3E6D4;"><span leaf="">{{line}}</span></p><p style="margin:0;padding:3px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#F3E6D4;"><span leaf="">{{line}}</span></p></section>
+<section style="margin:0 0 20px;background:#3F2E22;padding:12px 0;"><p style="margin:0;padding:3px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#F3E6D4;color:#D4B896;"><span leaf="">{{lang}}</span></p><p style="margin:0;padding:3px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#F3E6D4;"><span leaf="">{{line}}</span></p><p style="margin:0;padding:3px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#F3E6D4;"><span leaf="">{{line}}</span></p></section>
 ```
 
 ### slot:code_light
@@ -151,13 +151,13 @@
 ### slot:image
 
 ```html
-<figure style="margin:0 0 22px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:8px 0 0;font-size:12px;color:#6B5748;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span><span leaf="">{{alt}}</span><span leaf="">{{src}}</span></figcaption></figure>
+<figure style="margin:0 0 22px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:8px 0 0;font-size:12px;color:#6B5748;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span></figcaption></figure>
 ```
 
 ### slot:image_gif
 
 ```html
-<figure style="margin:0 0 22px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:8px 0 0;font-size:12px;color:#6B5748;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span><span leaf="">{{alt}}</span><span leaf="">{{src}}</span></figcaption></figure>
+<figure style="margin:0 0 22px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:8px 0 0;font-size:12px;color:#6B5748;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span></figcaption></figure>
 ```
 
 ### slot:media_ph
@@ -242,7 +242,7 @@
 4. `toc`（封面后的摘录轨）
 5. `rail-digest`（可选）
 6. 章节循环：`margin-label` → `h2` → 段落 / `field-note`
-7. `afterword`
+7. `afterword`（可选）
 8. `footer`
 9. `root` 关闭
 

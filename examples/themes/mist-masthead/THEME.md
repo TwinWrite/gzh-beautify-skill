@@ -109,7 +109,7 @@
 ### slot:callout_warn
 
 ```html
-<section style="margin:0 0 24px;padding:14px 0 14px 16px;border-left:2px solid #C45C26;"><p style="margin:0 0 6px;font-size:12px;letter-spacing:0.18em;color:#C45C26;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{label}}</span></p><p style="margin:0;font-size:15px;color:#1C1917;line-height:1.8;"><span leaf="">{{body}}</span></p></section>
+<section style="margin:0 0 24px;padding:14px 0 14px 16px;border-left:2px solid #C45C26;"><p style="margin:0 0 6px;font-size:12px;letter-spacing:0.18em;color:#1C1917;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{label}}</span></p><p style="margin:0;font-size:15px;color:#1C1917;line-height:1.8;"><span leaf="">{{body}}</span></p></section>
 ```
 
 ### slot:quote_pull
@@ -139,7 +139,7 @@
 ### slot:code_dark
 
 ```html
-<section style="margin:0 0 24px;background:#1C1917;padding:12px 0;"><p style="margin:0;padding:3px 16px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#E7E2D8;color:#A8C0D4;"><span leaf="">{{lang}}</span></p><p style="margin:0;padding:3px 16px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#E7E2D8;"><span leaf="">{{line}}</span></p><p style="margin:0;padding:3px 16px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#E7E2D8;"><span leaf="">{{line}}</span></p></section>
+<section style="margin:0 0 24px;background:#1C1917;padding:12px 0;"><p style="margin:0;padding:3px 16px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#FAF8F4;color:#C5D4E0;"><span leaf="">{{lang}}</span></p><p style="margin:0;padding:3px 16px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#FAF8F4;"><span leaf="">{{line}}</span></p><p style="margin:0;padding:3px 16px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.7;color:#FAF8F4;"><span leaf="">{{line}}</span></p></section>
 ```
 
 ### slot:code_light
@@ -151,13 +151,13 @@
 ### slot:image
 
 ```html
-<figure style="margin:0 0 28px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:8px 0 0;font-size:12px;color:#5E574E;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span><span leaf="">{{alt}}</span><span leaf="">{{src}}</span></figcaption></figure>
+<figure style="margin:0 0 28px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:8px 0 0;font-size:12px;color:#5E574E;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span></figcaption></figure>
 ```
 
 ### slot:image_gif
 
 ```html
-<figure style="margin:0 0 28px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:8px 0 0;font-size:12px;color:#5E574E;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span><span leaf="">{{alt}}</span><span leaf="">{{src}}</span></figcaption></figure>
+<figure style="margin:0 0 28px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;"><figcaption style="margin:8px 0 0;font-size:12px;color:#5E574E;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;"><span leaf="">{{caption}}</span></figcaption></figure>
 ```
 
 ### slot:media_ph
@@ -240,7 +240,7 @@
 2. `masthead-folio`（可选）
 3. `hero`
 4. `toc`（在封面之后）
-5. `editor-note`（评论/随笔可用）
+5. `editor-note`（可选）
 6. 章节循环：`chapter-ornament` → `h2` → 段落/块
 7. `end-mark`
 8. `footer`

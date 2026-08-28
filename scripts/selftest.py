@@ -25,6 +25,14 @@ REQUIRED = lint_theme.REQUIRED_SLOTS
 def _slot_html(slot: str) -> str:
     required = lint_theme.SLOT_REQUIRED_PLACEHOLDERS.get(slot)
     inner = "".join("{{" + name + "}}" for name in sorted(required)) if required else "{{" + slot + "}}"
+    if slot in {"image", "image_gif"}:
+        return (
+            '<figure style="margin:0 0 16px;">'
+            '<img src="{{src}}" alt="{{alt}}" '
+            'style="max-width:100%;height:auto;display:block;margin:0 auto;">'
+            '<figcaption style="margin:8px 0 0;font-size:12px;color:#4B5563;">'
+            '<span leaf="">{{caption}}</span></figcaption></figure>\n'
+        )
     if slot == "root":
         return (
             '<section style="max-width:677px;margin:0 auto;background:#FFFFFF;color:#1F2937;">\n'
@@ -38,16 +46,16 @@ def _slot_html(slot: str) -> str:
         )
     if slot == "media_ph":
         return (
-            '<section style="margin:0 0 24px;padding:24px;border:1.5px dashed #D1D5DB;'
-            'border-radius:12px;background:#FAFAF8;text-align:center;">'
-            '<p style="margin:0;font-size:14px;color:#6B7280;"><span leaf="">{{body}}</span></p>'
+            '<section style="margin:0 0 24px;padding:24px;border:1.5px dashed #E5E7EB;'
+            'border-radius:12px;background:#FFFFFF;text-align:center;">'
+            '<p style="margin:0;font-size:14px;color:#4B5563;"><span leaf="">{{body}}</span></p>'
             "</section>\n"
         )
     if slot.startswith("code_"):
         return (
-            '<section style="margin:0 0 20px;background:#0F172A;border-radius:8px;">'
+            '<section style="margin:0 0 20px;background:#1F2937;border-radius:8px;">'
             '<p style="margin:0;padding:12px;font-family:Consolas,Monaco,monospace;'
-            f'font-size:13px;color:#E2E8F0;"><span leaf="">{inner}</span></p></section>\n'
+            f'font-size:13px;color:#FFFFFF;"><span leaf="">{inner}</span></p></section>\n'
         )
     return (
         '<p style="margin:0 0 12px;font-size:16px;color:#1F2937;">'
@@ -2960,6 +2968,69 @@ def main() -> int:
             "footer",
         )
         assert_true(not attr_ph, "属性里的占位不应算可用内容")
+
+        img_ok = lint_theme.html_fence_usable(
+            '<figure style="margin:0;">'
+            '<img src="{{src}}" alt="{{alt}}" '
+            'style="max-width:100%;height:auto;display:block;margin:0 auto;">'
+            '<figcaption style="color:#111827;"><span leaf="">{{caption}}</span></figcaption>'
+            "</figure>",
+            "slot",
+            "image",
+        )
+        assert_true(img_ok, "img 的 src/alt 属性占位应算 image 槽可用")
+        img_no_caption = lint_theme.html_fence_usable(
+            '<img src="{{src}}" alt="{{alt}}" '
+            'style="max-width:100%;height:auto;display:block;margin:0 auto;">',
+            "slot",
+            "image",
+        )
+        assert_true(not img_no_caption, "image 槽仍须有 {{caption}} 文案占位")
+
+        img_text_only = lint_theme.html_fence_usable(
+            '<figure style="margin:0;">'
+            '<img style="max-width:100%;height:auto;display:block;margin:0 auto;">'
+            '<figcaption><span leaf="">{{src}}</span>'
+            '<span leaf="">{{alt}}</span>'
+            '<span leaf="">{{caption}}</span></figcaption></figure>',
+            "slot",
+            "image",
+        )
+        assert_true(not img_text_only, "image 的 src/alt 只在图注文案里不应算可用")
+
+        leak_theme = Path(tmp) / "image-caption-leak-pack"
+        write_mini_theme(leak_theme)
+        leak_md = (leak_theme / "THEME.md").read_text(encoding="utf-8")
+        leak_md = leak_md.replace(
+            '<figcaption style="margin:8px 0 0;font-size:12px;color:#4B5563;">'
+            '<span leaf="">{{caption}}</span></figcaption>',
+            '<figcaption style="margin:8px 0 0;font-size:12px;color:#4B5563;">'
+            '<span leaf="">{{caption}}</span>'
+            '<span leaf="">{{alt}}</span>'
+            '<span leaf="">{{src}}</span></figcaption>',
+            1,
+        )
+        (leak_theme / "THEME.md").write_text(leak_md, encoding="utf-8")
+        leak_err, _ = lint_theme.lint_theme(leak_theme, schema)
+        assert_true(
+            any("图注" in e and "src" in e for e in leak_err),
+            f"图注里的 src/alt 应失败: {leak_err}",
+        )
+
+        rogue_theme = Path(tmp) / "undeclared-hex-pack"
+        write_mini_theme(rogue_theme)
+        rogue_md = (rogue_theme / "THEME.md").read_text(encoding="utf-8")
+        rogue_md = rogue_md.replace(
+            "color:#1F2937;",
+            "color:#FF00AA;",
+            1,
+        )
+        (rogue_theme / "THEME.md").write_text(rogue_md, encoding="utf-8")
+        rogue_err, _ = lint_theme.lint_theme(rogue_theme, schema)
+        assert_true(
+            any("未登记色" in e and "#FF00AA" in e for e in rogue_err),
+            f"未登记色应失败: {rogue_err}",
+        )
 
         attr_ph_comp = lint_theme.lint_html_block(
             '<p style="color:red" title="{{body}}"></p>',

@@ -73,7 +73,7 @@
 ### slot:mark
 
 ```html
-<span style="background:#FEF3C7;color:#92400E;padding:0 4px;border-radius:4px;"><span leaf="">{{phrase}}</span></span>
+<span style="background:#E6F4F1;color:#115E59;padding:0 4px;border-radius:4px;"><span leaf="">{{phrase}}</span></span>
 ```
 
 ### slot:underline
@@ -97,7 +97,7 @@
 ### slot:blockquote
 
 ```html
-<section style="margin:0 0 16px;padding:12px 14px;background:#F8FAFC;border-radius:12px;border-left:4px solid #0F766E;"><p style="margin:0;font-size:14px;color:#1A2332;line-height:1.7;"><span leaf="">{{body}}</span></p></section>
+<section style="margin:0 0 16px;padding:12px 14px;background:#E6F4F1;border-radius:12px;border-left:4px solid #0F766E;"><p style="margin:0;font-size:14px;color:#1A2332;line-height:1.7;"><span leaf="">{{body}}</span></p></section>
 ```
 
 ### slot:callout_tip
@@ -109,7 +109,7 @@
 ### slot:callout_warn
 
 ```html
-<section style="margin:0 0 16px;padding:12px 14px;background:#FEF3C7;border-radius:12px;"><p style="margin:0 0 4px;font-size:12px;font-weight:800;color:#D97706;"><span leaf="">{{label}}</span></p><p style="margin:0;font-size:14px;color:#92400E;line-height:1.7;"><span leaf="">{{body}}</span></p></section>
+<section style="margin:0 0 16px;padding:12px 14px;background:#FFFFFF;border-radius:12px;border-left:4px solid #D97706;"><p style="margin:0 0 4px;font-size:12px;font-weight:800;color:#1A2332;"><span leaf="">{{label}}</span></p><p style="margin:0;font-size:14px;color:#1A2332;line-height:1.7;"><span leaf="">{{body}}</span></p></section>
 ```
 
 ### slot:quote_pull
@@ -121,7 +121,7 @@
 ### slot:ul
 
 ```html
-<section style="margin:0 0 16px;padding:12px 14px;background:#F8FAFC;border-radius:12px;"><p style="margin:0 0 8px;font-size:15px;color:#1A2332;line-height:1.6;"><span leaf="">▸ </span><span leaf="">{{item}}</span></p><p style="margin:0 0 8px;font-size:15px;color:#1A2332;line-height:1.6;"><span leaf="">▸ </span><span leaf="">{{item}}</span></p><p style="margin:0;font-size:15px;color:#1A2332;line-height:1.6;"><span leaf="">▸ </span><span leaf="">{{item}}</span></p></section>
+<section style="margin:0 0 16px;padding:12px 14px;background:#E6F4F1;border-radius:12px;"><p style="margin:0 0 8px;font-size:15px;color:#1A2332;line-height:1.6;"><span leaf="">▸ </span><span leaf="">{{item}}</span></p><p style="margin:0 0 8px;font-size:15px;color:#1A2332;line-height:1.6;"><span leaf="">▸ </span><span leaf="">{{item}}</span></p><p style="margin:0;font-size:15px;color:#1A2332;line-height:1.6;"><span leaf="">▸ </span><span leaf="">{{item}}</span></p></section>
 ```
 
 ### slot:ol
@@ -133,13 +133,13 @@
 ### slot:table
 
 ```html
-<table style="width:100%;border-collapse:collapse;margin:0 0 16px;border-radius:12px;"><tr style="background:#0F766E;"><th style="padding:8px 10px;font-size:13px;font-weight:800;color:#FFFFFF;background:#0F766E;text-align:left;"><span leaf="">{{h1}}</span></th><th style="padding:8px 10px;font-size:13px;font-weight:800;color:#FFFFFF;background:#0F766E;text-align:left;"><span leaf="">{{h2}}</span></th></tr><tr style="background:#F8FAFC;"><td style="padding:8px 10px;font-size:14px;color:#1A2332;background:#F8FAFC;"><span leaf="">{{c1}}</span></td><td style="padding:8px 10px;font-size:14px;color:#1A2332;background:#F8FAFC;"><span leaf="">{{c2}}</span></td></tr></table>
+<table style="width:100%;border-collapse:collapse;margin:0 0 16px;border-radius:12px;"><tr style="background:#0F766E;"><th style="padding:8px 10px;font-size:13px;font-weight:800;color:#FFFFFF;background:#0F766E;text-align:left;"><span leaf="">{{h1}}</span></th><th style="padding:8px 10px;font-size:13px;font-weight:800;color:#FFFFFF;background:#0F766E;text-align:left;"><span leaf="">{{h2}}</span></th></tr><tr style="background:#E6F4F1;"><td style="padding:8px 10px;font-size:14px;color:#1A2332;background:#E6F4F1;"><span leaf="">{{c1}}</span></td><td style="padding:8px 10px;font-size:14px;color:#1A2332;background:#E6F4F1;"><span leaf="">{{c2}}</span></td></tr></table>
 ```
 
 ### slot:code_dark
 
 ```html
-<section style="margin:0 0 16px;background:#134E4A;border-radius:12px;padding:10px 0;box-shadow:0 1px 4px rgba(15,118,110,0.10);"><p style="margin:0;padding:2px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.65;color:#ECFDF5;color:#99F6E4;"><span leaf="">{{lang}}</span></p><p style="margin:0;padding:2px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.65;color:#ECFDF5;"><span leaf="">{{line}}</span></p><p style="margin:0;padding:2px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.65;color:#ECFDF5;"><span leaf="">{{line}}</span></p></section>
+<section style="margin:0 0 16px;background:#1A2332;border-radius:12px;padding:10px 0;box-shadow:0 1px 4px rgba(15,118,110,0.10);"><p style="margin:0;padding:2px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.65;color:#FFFFFF;color:#5EEAD4;"><span leaf="">{{lang}}</span></p><p style="margin:0;padding:2px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.65;color:#FFFFFF;"><span leaf="">{{line}}</span></p><p style="margin:0;padding:2px 14px;font-family:'SF Mono',Consolas,Monaco,monospace;font-size:13px;line-height:1.65;color:#FFFFFF;"><span leaf="">{{line}}</span></p></section>
 ```
 
 ### slot:code_light
@@ -151,13 +151,13 @@
 ### slot:image
 
 ```html
-<figure style="margin:0 0 16px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:12px;"><figcaption style="margin:6px 0 0;font-size:12px;color:#4B5563;text-align:center;"><span leaf="">{{caption}}</span><span leaf="">{{alt}}</span><span leaf="">{{src}}</span></figcaption></figure>
+<figure style="margin:0 0 16px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:12px;"><figcaption style="margin:6px 0 0;font-size:12px;color:#4B5563;text-align:center;"><span leaf="">{{caption}}</span></figcaption></figure>
 ```
 
 ### slot:image_gif
 
 ```html
-<figure style="margin:0 0 16px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:12px;"><figcaption style="margin:6px 0 0;font-size:12px;color:#4B5563;text-align:center;"><span leaf="">{{caption}}</span><span leaf="">{{alt}}</span><span leaf="">{{src}}</span></figcaption></figure>
+<figure style="margin:0 0 16px;"><img src="{{src}}" alt="{{alt}}" style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:12px;"><figcaption style="margin:6px 0 0;font-size:12px;color:#4B5563;text-align:center;"><span leaf="">{{caption}}</span></figcaption></figure>
 ```
 
 ### slot:media_ph
@@ -189,7 +189,7 @@
 ### sig:checklist-row
 
 ```html
-<p style="margin:0 0 8px;font-size:15px;color:#1A2332;line-height:1.6;padding:8px 12px;background:#F8FAFC;border-radius:8px;"><span leaf="">☐ </span><span leaf="">{{item}}</span></p>
+<p style="margin:0 0 8px;font-size:15px;color:#1A2332;line-height:1.6;padding:8px 12px;background:#E6F4F1;border-radius:8px;"><span leaf="">☐ </span><span leaf="">{{item}}</span></p>
 ```
 
 ### sig:chapter-badge
@@ -213,7 +213,7 @@
 ### sig:do-dont
 
 ```html
-<section style="margin:0 0 14px;padding:0;"><p style="margin:0 0 8px;font-size:14px;color:#115E59;padding:10px 12px;background:#E6F4F1;border-radius:10px;"><span leaf="">做：</span><span leaf="">{{do}}</span></p><p style="margin:0;font-size:14px;color:#92400E;padding:10px 12px;background:#FEF3C7;border-radius:10px;"><span leaf="">不做：</span><span leaf="">{{dont}}</span></p></section>
+<section style="margin:0 0 14px;padding:0;"><p style="margin:0 0 8px;font-size:14px;color:#115E59;padding:10px 12px;background:#E6F4F1;border-radius:10px;"><span leaf="">做：</span><span leaf="">{{do}}</span></p><p style="margin:0;font-size:14px;color:#1A2332;padding:10px 12px;background:#E6F4F1;border-radius:10px;"><span leaf="">不做：</span><span leaf="">{{dont}}</span></p></section>
 ```
 
 ### sig:recipe-head
@@ -231,7 +231,7 @@
 ### sig:pitfall-flag
 
 ```html
-<section style="margin:0 0 14px;padding:12px 14px;border-left:4px solid #D97706;background:#FFFBEB;border-radius:0 12px 12px 0;"><p style="margin:0 0 4px;font-size:12px;font-weight:800;color:#D97706;"><span leaf="">{{label}}</span></p><p style="margin:0;font-size:14px;color:#92400E;line-height:1.65;"><span leaf="">{{body}}</span></p></section>
+<section style="margin:0 0 14px;padding:12px 14px;border-left:4px solid #D97706;background:#FFFFFF;border-radius:0 12px 12px 0;"><p style="margin:0 0 4px;font-size:12px;font-weight:800;color:#1A2332;"><span leaf="">{{label}}</span></p><p style="margin:0;font-size:14px;color:#1A2332;line-height:1.65;"><span leaf="">{{body}}</span></p></section>
 ```
 
 ## 文章骨架
