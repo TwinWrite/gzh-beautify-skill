@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gzh-beautify-skill · 主题效果总览</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      background:
+        radial-gradient(circle at 14% 8%, rgba(103, 146, 126, .25), transparent 26%),
+        radial-gradient(circle at 88% 0%, rgba(180, 35, 24, .17), transparent 25%),
+        #101513;
+      color: #f4f2eb;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+      overflow: hidden;
+    }
+    main { width: 1180px; margin: 0 auto; padding: 34px 0 28px; }
+    header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 22px; }
+    .eyebrow { margin: 0 0 8px; color: #98b6a5; font-size: 12px; font-weight: 700; letter-spacing: .18em; }
+    h1 { margin: 0; font-family: "Songti SC", STSong, serif; font-size: 34px; font-weight: 600; letter-spacing: .02em; }
+    .promise { margin: 0 0 3px; color: #a8ada9; font-size: 13px; letter-spacing: .04em; }
+    .gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+    .card {
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 18px;
+      background: rgba(255,255,255,.06);
+      box-shadow: 0 22px 55px rgba(0,0,0,.32);
+    }
+    .bar { display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 0 14px; }
+    .dots { display: flex; gap: 6px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,.23); }
+    .name { color: #e9ebe8; font-size: 12px; font-weight: 650; letter-spacing: .08em; }
+    .tag { color: #929a95; font-size: 10px; letter-spacing: .12em; }
+    .viewport { position: relative; height: 480px; overflow: hidden; background: #e7e5e0; }
+    iframe {
+      position: absolute; top: 0; left: 0;
+      width: 760px; height: 1100px;
+      border: 0; transform: scale(.495); transform-origin: 0 0;
+      pointer-events: none;
+    }
+    footer { margin-top: 16px; color: #747c77; font-size: 11px; text-align: center; letter-spacing: .16em; }
+    body.single main { width: 378px; padding: 0; }
+    body.single header, body.single footer { display: none; }
+    body.single .gallery { display: block; }
+    body.single .card { display: none; border-radius: 0; }
+    body.single .card.active { display: block; }
+    body.hires { padding-left: calc(50px * var(--density)); }
+    body.hires main {
+      margin: 0;
+      transform: scale(var(--density));
+      transform-origin: 0 0;
+    }
+    body.hires:not(.single) main { width: 1065px; }
+    body.hires.single { padding-left: 0; }
+  </style>
+  <script>if (new URLSearchParams(location.search).has("theme")) document.body?.classList.add("single");</script>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">WECHAT ARTICLE THEME FACTORY</p>
+        <h1>一套结构契约，长出完全不同的气质</h1>
+      </div>
+      <p class="promise">主题包可复用 · 26 个必选槽 · 全量内联样式</p>
+    </header>
+    <section class="gallery">
+      <article class="card">
+        <div class="bar"><span class="dots"><i class="dot"></i><i class="dot"></i><i class="dot"></i></span><span class="name">雾蓝刊头</span><span class="tag">EDITORIAL</span></div>
+        <div class="viewport"><iframe title="雾蓝刊头" src="../examples/themes/mist-masthead/preview.html"></iframe></div>
+      </article>
+      <article class="card">
+        <div class="bar"><span class="dots"><i class="dot"></i><i class="dot"></i><i class="dot"></i></span><span class="name">苔色留白</span><span class="tag">ZEN</span></div>
+        <div class="viewport"><iframe title="苔色留白" src="../examples/themes/moss-zen/preview.html"></iframe></div>
+      </article>
+      <article class="card">
+        <div class="bar"><span class="dots"><i class="dot"></i><i class="dot"></i><i class="dot"></i></span><span class="name">步骤工坊</span><span class="tag">WORKSHOP</span></div>
+        <div class="viewport"><iframe title="步骤工坊" src="../examples/themes/step-workshop/preview.html"></iframe></div>
+      </article>
+    </section>
+    <footer>FROM BRIEF → STRUCTURE MODEL → THEME PACKAGE → WECHAT HTML</footer>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const selectedTheme = params.get("theme");
+    const density = Math.max(1, Number(params.get("density")) || 1);
+    if (density > 1) {
+      document.body.classList.add("hires");
+      document.body.style.setProperty("--density", density);
+    }
+    if (selectedTheme) {
+      document.body.classList.add("single");
+      const index = { mist: 0, moss: 1, step: 2 }[selectedTheme];
+      document.querySelectorAll(".card")[index ?? 0].classList.add("active");
+    }
+    const copy = {
+      "刊头栏目占位": "城市观察 · 第 12 期",
+      "教程标签占位": "实用指南 · 5 分钟上手",
+      "栏目占位": "四时手帖",
+      "主标题占位": "把复杂内容，排成愿意读完的文章",
+      "副题占位": "层级、留白与节奏，让信息自然抵达读者。",
+      "日期占位": "2026 · AUGUST",
+      "看点一占位": "从内容气质推导视觉语言",
+      "看点二占位": "用固定槽位守住排版一致性",
+      "看点三占位": "一次生成，长期复用",
+      "章节标题占位": "先确定文章的阅读节奏",
+      "小节标题占位": "让层级自己说话",
+      "强调小标题占位": "关键不是装饰，而是秩序",
+      "正文段落占位": "排版的目的，是让信息自然抵达读者。",
+      "正文段落占位。长呼吸节奏，一句一行气口。": "好的排版不抢内容的声音，只让重点更清楚、阅读更从容。",
+      "正文段落占位。短卡连发，一句一个动作。": "选择主题，填入内容，校验后即可复制到公众号。",
+      "加粗短语占位": "读者真正需要记住的部分",
+      "高亮短语占位": "视觉锚点",
+      "短语占位": "视觉锚点",
+      "下划线短语占位": "这里值得停一下",
+      "引用段落占位": "形式退后一步，内容才能向前一步。",
+      "提示正文占位": "先搭好层级，再处理细节。",
+      "注意正文占位": "每一种强调都应该有明确用途。",
+      "结论金句占位": "好排版，让读者忘记排版。"
+    };
+    document.querySelectorAll("iframe").forEach((frame) => {
+      frame.addEventListener("load", () => {
+        const doc = frame.contentDocument;
+        let mainTitleCount = 0;
+        let phraseCount = 0;
+        const phrases = ["层级清楚", "重点有力", "阅读从容"];
+        doc.querySelectorAll("[leaf]").forEach((node) => {
+          const value = node.textContent.trim();
+          if (value.startsWith("slot:")) {
+            node.parentElement.style.display = "none";
+          } else if (value === "主标题占位" && mainTitleCount++ > 0) {
+            node.textContent = "留白，是内容的呼吸";
+          } else if (value === "短语占位") {
+            node.textContent = phrases[phraseCount++ % phrases.length];
+          } else if (copy[value]) {
+            node.textContent = copy[value];
+          }
+        });
+        doc.body.style.overflow = "hidden";
+      });
+    });
+  </script>
+</body>
+</html>
