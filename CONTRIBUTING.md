@@ -7,7 +7,8 @@
 - `SKILL.md` — Agent 入口（分流：生产 / 渲染）
 - `references/` — 平台约束、设计系统、主题契约、工厂、渲染合同
 - `scripts/` — `lint_theme.py` / `validate_article.py` / `wrap_preview.py`
-- `themes/` — 生产产出物（可空）
+- `themes/` — 生产产出物（可空；渲染只从这里发现主题包）
+- `examples/themes/` — 工厂冒烟示例（不参与渲染发现）
 - `assets/` — 预览壳与试排稿
 
 ## 改完必跑
@@ -15,6 +16,7 @@
 ```bash
 python3 scripts/selftest.py
 python3 scripts/lint_theme.py themes
+python3 scripts/lint_theme.py examples/themes   # 若有冒烟示例
 ```
 
 若你本地有主题包，再对一篇试排稿跑：

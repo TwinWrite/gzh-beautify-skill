@@ -31,7 +31,7 @@ description: 生产可复用的微信公众号排版主题包，并用已生成�
 | 「排这篇」但找不到主题包 | 先生产（brief 可从文章气质推断），再渲染，交付时说明主题从何而来 |
 | 普通网页、落地页、PPT | 不用本 skill |
 
-主题包查找顺序：用户路径 → `./themes/{id}/` → `<SKILL_ROOT>/themes/{id}/`。
+主题包查找顺序：用户路径 → `./themes/{id}/` → `<SKILL_ROOT>/themes/{id}/`。`examples/themes/` 不在发现路径里。用户说「像教程绿卡 / 石墨极简 / 禅意留白」时，按 [design-system.md](references/design-system.md) 气质表推导后走工厂，不要把示例或外部组件库当货架。
 
 ## 生产主题
 

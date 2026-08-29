@@ -38,7 +38,7 @@
 | 圆角 / 阴影 | 按 `surface` 定 |
 | 适用场景 | 写成 `tags.scenes` |
 
-参考图只提取视觉特征（色、留白、线、密度、情绪），禁止复刻可识别商标、人物、整页构图或原文案。文字 brief 与图片冲突时，以用户写明的文字为准。
+参考图只提取视觉特征（色、留白、线、密度、情绪），禁止复刻可识别商标、人物、整页构图或原文案。用户说「像教程绿卡 / 石墨极简 / 禅意留白 / 票据戳记 / 内刊手记 / 观点正红」时，按 [design-system.md](design-system.md) 气质表填结构模型和色板角色，再生成自己的签名槽；不要去抄第三方主题的 HTML。文字 brief 与图片冲突时，以用户写明的文字为准。
 
 id 冲突：问覆盖还是换名。覆盖前保留旧目录内容的 diff 意识，不要静默删。
 
@@ -120,12 +120,13 @@ python3 <SKILL_ROOT>/scripts/validate_article.py --strict <试排.html>
 2. 预览块可以带 `id="preview-slot-hero"` 这种定位 id；style 仍以内联为主。
 3. 根视觉：纸色底、max-width 677px、系统字体栈按 json 的 stack 展开。
 4. 占位文案只用结构说明（「主标题占位」「流程节点占位」），不要真实品牌、地名、人名、价格、功能名。
-5. 图片用色块 section 模拟，不要外链占位图。
+5. 图片用色块 section 模拟，不要外链占位图。THEME.md 里 `image`/`image_gif` 的 `{{src}}`/`{{alt}}` 只放在 `<img>` 属性，图注只放 `{{caption}}`。
 6. 字号 ≤ 24px。不要 grid、不要 CSS 变量、不要 position sticky/fixed/absolute、不要 float、不要 svg/canvas/video/button/form。
-7. 代码块演示「每行一个 p」，不要 white-space:pre。
+7. 代码块演示「每行一个 p」，不要 white-space:pre。深色代码底用 tokens 的 `ink`，字用 `page`，不要另起一套未登记色。
 8. 强调用竖条/标签/下划线，不要四周虚线框（media_ph 除外）。
-9. 主色只做锚点；大面积是 page + ink 灰阶。
+9. 主色只做锚点；大面积是 page + ink 灰阶。组件 HTML 的 `#RRGGBB` 必须能在 theme.json 九色里找到。
 10. 即使 flex 失效，堆叠后仍能读。子项间距用 margin，不靠 gap。
+11. 骨架里标「可选」的签名槽，必须和配方表的「不要用」一致，避免渲染时又强制插入又禁止。
 
 签名槽必须能从 voice/heading/surface 讲出差异：刊头主题不要长成步骤卡片墙；教程主题不要长成全是情绪海报。
 

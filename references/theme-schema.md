@@ -61,7 +61,7 @@ themes/{id}/
 | `table` | 表格 | 表头/单元格占位 |
 | `code_dark` | 围栏代码（默认） | `{{lang}}` 每行 `{{line}}` |
 | `code_light` | 围栏代码（浅色主题气质） | 同上 |
-| `image` | `![cap](src)` | `{{src}}` `{{alt}}` `{{caption}}` |
+| `image` | `![cap](src)` | `{{src}}`/`{{alt}}` 写在 `<img>` 属性上；`{{caption}}` 只出现在图注 |
 | `image_gif` | `.gif` | 同上 |
 | `media_ph` | `【插入…】` | `{{body}}` |
 | `footer` | 文末签名 / CTA | `{{author}}` `{{bio}}` |
@@ -83,7 +83,7 @@ HTML 规则见 [wechat-constraints.md](wechat-constraints.md)。`THEME.md` 里�
 5. `footer`
 6. `root` 关闭
 
-不同主题骨架可以不同，但必须写明 `toc` 相对 `hero` 的位置。
+不同主题骨架可以不同，但必须写明 `toc` 相对 `hero` 的位置。骨架里出现、却被某条配方「不要用」的签名槽，必须标成「可选」，避免渲染时既强制插入又禁止。
 
 ### 文章类型配方
 

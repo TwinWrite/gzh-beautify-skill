@@ -1,0 +1,101 @@
+{
+  "id": "mist-masthead",
+  "name": "雾蓝刊头",
+  "version": 1,
+  "description": "雾蓝杂志气质：细线刊头、衬线标题、长呼吸段落。适合评论与深度稿。",
+  "structure_model": {
+    "voice": "narrative",
+    "density": "sparse",
+    "heading": "masthead",
+    "surface": "hairline",
+    "rhythm": "long-breath"
+  },
+  "tokens": {
+    "color": {
+      "page": "#FAF8F4",
+      "ink": "#1C1917",
+      "ink_muted": "#5E574E",
+      "brand": "#3D5A80",
+      "brand_soft": "#E4EBF3",
+      "brand_ink": "#243F5C",
+      "accent": "#C45C26",
+      "rule": "#D9D3C8",
+      "underline": "#C5D4E0"
+    },
+    "type": {
+      "stack": "serif",
+      "body_size": "16px",
+      "body_line_height": "1.9",
+      "max_title_size": "22px"
+    },
+    "shape": {
+      "radius": "0px",
+      "shadow": "none"
+    },
+    "layout": {
+      "max_width": "677px",
+      "gutter": "20px"
+    }
+  },
+  "underline_css": "border-bottom:2px solid #C5D4E0;font-weight:600;",
+  "tags": {
+    "craft": [
+      "细线",
+      "刊头",
+      "衬线"
+    ],
+    "mood": [
+      "克制",
+      "杂志"
+    ],
+    "scenes": [
+      "评论",
+      "深度",
+      "专栏"
+    ]
+  },
+  "slots": [
+    "root",
+    "hero",
+    "toc",
+    "h2",
+    "h3",
+    "h3_label",
+    "paragraph",
+    "divider",
+    "strong",
+    "mark",
+    "underline",
+    "strike",
+    "code_inline",
+    "blockquote",
+    "callout_tip",
+    "callout_warn",
+    "quote_pull",
+    "ul",
+    "ol",
+    "table",
+    "code_dark",
+    "code_light",
+    "image",
+    "image_gif",
+    "media_ph",
+    "footer"
+  ],
+  "signature_slots": [
+    "masthead-folio",
+    "editor-note",
+    "pull-spread",
+    "chapter-ornament",
+    "colophon-line",
+    "issue-kicker",
+    "margin-aside",
+    "end-mark",
+    "verse-rule",
+    "byline-hair"
+  ],
+  "files": {
+    "library": "THEME.md",
+    "preview": "preview.html"
+  }
+}

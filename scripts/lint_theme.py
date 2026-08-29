@@ -92,6 +92,7 @@ FONT_SIZE = re.compile(r"font-size\s*:\s*(\d+(?:\.\d+)?)px", re.I)
 FOURSIDE_DASHED = re.compile(r"border\s*:\s*[^;{}]*dashed", re.I)
 CENTERED = re.compile(r"text-align\s*:\s*center", re.I)
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+HTML_HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}(?![0-9A-Fa-f])")
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")
 CJK = re.compile(r"[一-鿿㐀-䶿]")
 PLACEHOLDER = re.compile(r"\{\{")
@@ -935,6 +936,8 @@ class _FenceUsableCollector(HTMLParser):
         self.tags: list[str] = []
         self.has_placeholder = False
         self.placeholders: set[str] = set()
+        self.img_attr_placeholders: set[str] = set()
+        self.text_placeholders: set[str] = set()
         self.stack: list[str] = []
         self.top_level: list[str] = []
 
@@ -949,6 +952,16 @@ class _FenceUsableCollector(HTMLParser):
         if at_root:
             self.top_level.append(ltag)
         self.tags.append(ltag)
+        if ltag == "img":
+            ad = html_attrs_first(attrs)
+            for key in ("src", "alt"):
+                value = ad.get(key) or ""
+                if PLACEHOLDER.search(value):
+                    self.has_placeholder = True
+                for match in PLACEHOLDER_NAME.finditer(value):
+                    name = match.group(1)
+                    self.placeholders.add(name)
+                    self.img_attr_placeholders.add(name)
         if ltag not in VOID_TAGS:
             self.stack.append(ltag)
 
@@ -969,7 +982,9 @@ class _FenceUsableCollector(HTMLParser):
         if PLACEHOLDER.search(data or ""):
             self.has_placeholder = True
         for match in PLACEHOLDER_NAME.finditer(data or ""):
-            self.placeholders.add(match.group(1))
+            name = match.group(1)
+            self.placeholders.add(name)
+            self.text_placeholders.add(name)
 
 
 def html_fence_usable(body: str, kind: str, ident: str) -> bool:
@@ -983,6 +998,8 @@ def html_fence_usable(body: str, kind: str, ident: str) -> bool:
         pass
     if ident == "root":
         return collector.top_level == ["section"]
+    if ident in {"image", "image_gif"}:
+        return {"src", "alt"} <= collector.img_attr_placeholders and "caption" in collector.text_placeholders
     required = SLOT_REQUIRED_PLACEHOLDERS.get(ident) if kind == "slot" else None
     if required is not None:
         return required <= collector.placeholders
@@ -996,6 +1013,37 @@ def html_fence_usable(body: str, kind: str, ident: str) -> bool:
     if ident in {"image", "image_gif"}:
         return "img" in tags
     return False
+
+
+def fence_placeholder_collector(body: str) -> _FenceUsableCollector:
+    collector = _FenceUsableCollector()
+    try:
+        collector.feed(strip_html_comments(body))
+        collector.close()
+    except Exception:  # noqa: BLE001
+        pass
+    return collector
+
+
+def image_caption_leaks(body: str, ident: str) -> list[str]:
+    """src/alt that appear as visible text in image slots (should live on <img> only)."""
+    if ident not in {"image", "image_gif"}:
+        return []
+    text_names = fence_placeholder_collector(body).text_placeholders
+    return [name for name in ("src", "alt") if name in text_names]
+
+
+def undeclared_hex_colors(html: str, palette: set[str]) -> list[str]:
+    """#RRGGBB in component HTML that are not in theme.json's nine colors."""
+    extra: list[str] = []
+    seen: set[str] = set()
+    for match in HTML_HEX_COLOR.finditer(html or ""):
+        token = match.group(0)
+        key = token.upper()
+        if key not in palette and key not in seen:
+            seen.add(key)
+            extra.append(token)
+    return extra
 
 
 class _CompletedTagCounter(HTMLParser):
@@ -4089,6 +4137,11 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
             errors.append(f"id 非法: {theme_id}")
 
     color = (data.get("tokens") or {}).get("color") or {}
+    palette: set[str] = set()
+    if isinstance(color, dict):
+        for value in color.values():
+            if isinstance(value, str) and HEX.match(value):
+                palette.add(value.upper())
     if isinstance(color, dict) and all(isinstance(color.get(k), str) and HEX.match(color[k]) for k in ("page", "ink", "ink_muted", "brand_soft", "brand_ink")):
         page, ink, muted = color["page"], color["ink"], color["ink_muted"]
         if contrast_ratio(ink, page) < 7.0:
@@ -4176,6 +4229,17 @@ def lint_theme(theme_dir: Path, schema: dict) -> tuple[list[str], list[str]]:
             for body in fences:
                 if not html_fence_usable(body, kind, ident):
                     errors.append(f"{label} html 代码块缺少可用内容")
+                leaked = image_caption_leaks(body, ident)
+                if leaked:
+                    errors.append(
+                        f"{label} 图注不要渲染 {', '.join('{{' + n + '}}' for n in leaked)}，只保留 {{{{caption}}}}"
+                    )
+                if palette:
+                    extra = undeclared_hex_colors(body, palette)
+                    if extra:
+                        errors.append(
+                            f"{label} 使用未登记色 {', '.join(extra)}，组件 #RRGGBB 必须来自 theme.json 九色"
+                        )
                 for level, msg in lint_html_block(body, label):
                     (errors if level == "ERROR" else warnings).append(msg)
 

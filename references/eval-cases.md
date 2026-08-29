@@ -10,6 +10,8 @@
 | 只丢一张海报截图，「照这个气质做组件」 | 抽色与密度，不抄画面文字/Logo |
 | 「先排这篇文章」但 `themes/` 为空 | 先收 brief 生产主题，再渲染；不即兴手写未入库主题 |
 | 「用现成的摸鱼绿」 | 本 skill 无主题超市；说明需要生产或提供主题包路径 |
+| 「做出石墨极简 / 禅意留白 / 教程绿卡那种气质」 | 按 design-system 气质表推导结构模型和色板，走工厂；不抄第三方组件库 HTML |
+| `examples/themes/` 里有冒烟包 | 渲染发现仍只看 `themes/`；不要把示例当成货架 |
 | 改「圆角改小、少阴影」 | 改 json + 预览 + THEME.md，重跑 lint |
 
 ## 渲染
@@ -27,6 +29,7 @@
 ```bash
 python3 scripts/selftest.py
 python3 scripts/lint_theme.py themes
+python3 scripts/lint_theme.py examples/themes
 python3 scripts/validate_article.py --strict scripts/testdata/valid_article.html
 ```
 

@@ -22,6 +22,23 @@
 - 教程 / 工具说明 → `explainer` + `packed` + `numbered-chapter` + `soft-card` + `staccato`；签名槽偏步骤条、参数表、检查清单。
 - 内刊 / 复盘 → `journal` + `balanced` + `labeled-rail` + `paper` + `documentary`；签名槽偏栏目标签、摘录框、页码感分隔。
 
+用户要「像某类精致公众号杂志」时，用气质推结构，**不要去抄现成组件库的 HTML / 文案 / Logo**。色板按角色另填一套（brand / brand_soft / accent / 灰阶），不要把参考账号的色值当必须克隆的货架：
+
+| 用户说的气质 | 结构模型 | 色板怎么填 | 签名槽语法 |
+|--------------|----------|------------|------------|
+| 教程绿卡、信息密度高、杂志封面 | `explainer` / `packed` / `numbered-chapter` / `soft-card` / `staccato` | brand 翠绿或青绿，brand_soft 极浅绿，accent 暖色点睛 | 快讯封面卡、步骤条、参数芯片、检查清单 |
+| 观点编辑、正红点睛、编号章节 | `narrative` / `balanced` / `numbered-chapter` / `hairline` / `long-breath` | brand 正红，page 近白，accent 少用 | 引言卡、红编号、签名区，少卡片 |
+| 石墨灰、极简、细线、几乎无色块 | `narrative` / `sparse` / `masthead` / `hairline` / `long-breath` | brand 接近 ink_muted 的石墨灰，几乎无彩色 | 超大编号、上下细线引文、几何签名 |
+| 禅意留白、衬线金句、1px 细线 | `journal` / `sparse` / `masthead` / `paper` / `long-breath` | brand 苔绿，page 米白，密度 sparse | 大段距、居中衬线引文、少卡片 |
+| 票据/门票、硬阴影、编号票根 | `catalog` / `packed` / `stamp` / `ink` / `staccato` | brand 饱和，heading 走 stamp | 票签、计数章、细线撕边感（用细线+圆点，不用四周虚线框套标题） |
+| 内刊手记、分节多样、编者按 | `journal` / `balanced` / `labeled-rail` / `paper` / `documentary` | brand 褐或橄榄，surface paper | 栏目标签、摘录框、页码、后记 |
+
+`examples/themes/` 里有按上表产出的冒烟包（雾蓝刊头、步骤工坊、纸页手记、朱印目录、石墨刊读、苔色留白），只供对照结构，不进渲染发现路径。
+
+HTML 色值只能来自 `theme.json` 的九色。深色代码块用 `ink` 底 + `page` 字；警告标签用 `ink`（或对比度达标的 `brand_ink`）写在浅底上，不要用过浅的 `accent` 当 12px 标题色。`lint_theme.py` 会拒绝组件 HTML 里未登记的 `#RRGGBB`。
+
+`image` / `image_gif`：`{{src}}` 和 `{{alt}}` 只写在 `<img>` 属性里，`{{caption}}` 只出现在图注；空 alt 不要编造说明。
+
 ## 色板角色
 
 九个色值，全部 `#RRGGBB`：

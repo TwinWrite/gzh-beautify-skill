@@ -1,0 +1,101 @@
+{
+  "id": "cinnabar-catalog",
+  "name": "朱印目录",
+  "version": 1,
+  "description": "盘点目录气质：朱印戳记、条目票签、短促货架节奏。适合榜单与合集。",
+  "structure_model": {
+    "voice": "catalog",
+    "density": "packed",
+    "heading": "stamp",
+    "surface": "ink",
+    "rhythm": "staccato"
+  },
+  "tokens": {
+    "color": {
+      "page": "#FFFCF8",
+      "ink": "#1F1611",
+      "ink_muted": "#5C4E44",
+      "brand": "#B42318",
+      "brand_soft": "#FBE8E6",
+      "brand_ink": "#8A1A12",
+      "accent": "#1F4E79",
+      "rule": "#E8DDD4",
+      "underline": "#F0C4BE"
+    },
+    "type": {
+      "stack": "fangsong",
+      "body_size": "15px",
+      "body_line_height": "1.75",
+      "max_title_size": "22px"
+    },
+    "shape": {
+      "radius": "0px",
+      "shadow": "none"
+    },
+    "layout": {
+      "max_width": "677px",
+      "gutter": "20px"
+    }
+  },
+  "underline_css": "border-bottom:2px solid #F0C4BE;font-weight:600;",
+  "tags": {
+    "craft": [
+      "戳记",
+      "目录",
+      "票签"
+    ],
+    "mood": [
+      "醒目",
+      "利落"
+    ],
+    "scenes": [
+      "盘点",
+      "榜单",
+      "合集"
+    ]
+  },
+  "slots": [
+    "root",
+    "hero",
+    "toc",
+    "h2",
+    "h3",
+    "h3_label",
+    "paragraph",
+    "divider",
+    "strong",
+    "mark",
+    "underline",
+    "strike",
+    "code_inline",
+    "blockquote",
+    "callout_tip",
+    "callout_warn",
+    "quote_pull",
+    "ul",
+    "ol",
+    "table",
+    "code_dark",
+    "code_light",
+    "image",
+    "image_gif",
+    "media_ph",
+    "footer"
+  ],
+  "signature_slots": [
+    "stamp-mast",
+    "item-ticket",
+    "rank-chip",
+    "shelf-rule",
+    "pick-card",
+    "count-pill",
+    "series-mark",
+    "footnote-ink",
+    "index-row",
+    "seal-end"
+  ],
+  "files": {
+    "library": "THEME.md",
+    "preview": "preview.html"
+  }
+}

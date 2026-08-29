@@ -1,0 +1,101 @@
+{
+  "id": "graphite-editorial",
+  "name": "石墨刊读",
+  "version": 1,
+  "description": "石墨极简气质：超大编号、发丝线、几乎无色块。适合设计评论与专业观点。",
+  "structure_model": {
+    "voice": "narrative",
+    "density": "sparse",
+    "heading": "masthead",
+    "surface": "hairline",
+    "rhythm": "long-breath"
+  },
+  "tokens": {
+    "color": {
+      "page": "#FAFAFA",
+      "ink": "#18181B",
+      "ink_muted": "#3F3F46",
+      "brand": "#3F3F46",
+      "brand_soft": "#F4F4F5",
+      "brand_ink": "#27272A",
+      "accent": "#71717A",
+      "rule": "#E4E4E7",
+      "underline": "#D4D4D8"
+    },
+    "type": {
+      "stack": "sans",
+      "body_size": "16px",
+      "body_line_height": "1.9",
+      "max_title_size": "22px"
+    },
+    "shape": {
+      "radius": "0px",
+      "shadow": "none"
+    },
+    "layout": {
+      "max_width": "677px",
+      "gutter": "20px"
+    }
+  },
+  "underline_css": "border-bottom:2px solid #D4D4D8;font-weight:600;",
+  "tags": {
+    "craft": [
+      "细线",
+      "大编号",
+      "极简"
+    ],
+    "mood": [
+      "克制",
+      "专业"
+    ],
+    "scenes": [
+      "设计评论",
+      "科技观点",
+      "品牌"
+    ]
+  },
+  "slots": [
+    "root",
+    "hero",
+    "toc",
+    "h2",
+    "h3",
+    "h3_label",
+    "paragraph",
+    "divider",
+    "strong",
+    "mark",
+    "underline",
+    "strike",
+    "code_inline",
+    "blockquote",
+    "callout_tip",
+    "callout_warn",
+    "quote_pull",
+    "ul",
+    "ol",
+    "table",
+    "code_dark",
+    "code_light",
+    "image",
+    "image_gif",
+    "media_ph",
+    "footer"
+  ],
+  "signature_slots": [
+    "giant-num",
+    "hair-quote",
+    "geo-mark",
+    "thin-folio",
+    "slate-kicker",
+    "rule-spread",
+    "mute-note",
+    "quiet-byline",
+    "index-dot",
+    "chapter-rule"
+  ],
+  "files": {
+    "library": "THEME.md",
+    "preview": "preview.html"
+  }
+}
