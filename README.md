@@ -8,13 +8,13 @@
 
 ![三套公众号排版主题的真实内容效果：雾蓝刊头、苔色留白与步骤工坊](assets/readme/theme-showcase.jpg)
 
-<p align="center"><sub>同一套结构契约，可以生长出杂志感、东方留白与实用教程等不同气质。</sub></p>
+<p align="center"><sub>总览用于感受整体气质；点击下方任一单图，可查看清晰的原尺寸排版细节。</sub></p>
 
 <table>
   <tr>
-    <td width="33%" align="center"><img src="assets/readme/mist-masthead.jpg" alt="雾蓝刊头真实文章首屏"><br><sub>雾蓝刊头 · 克制杂志感</sub></td>
-    <td width="33%" align="center"><img src="assets/readme/moss-zen.jpg" alt="苔色留白真实文章首屏"><br><sub>苔色留白 · 东方长呼吸</sub></td>
-    <td width="33%" align="center"><img src="assets/readme/step-workshop.jpg" alt="步骤工坊真实文章首屏"><br><sub>步骤工坊 · 清晰行动感</sub></td>
+    <td width="33%" align="center"><a href="assets/readme/mist-masthead.jpg"><img src="assets/readme/mist-masthead.jpg" alt="雾蓝刊头真实文章首屏"></a><br><sub>雾蓝刊头 · 克制杂志感（点击查看原图）</sub></td>
+    <td width="33%" align="center"><a href="assets/readme/moss-zen.jpg"><img src="assets/readme/moss-zen.jpg" alt="苔色留白真实文章首屏"></a><br><sub>苔色留白 · 东方长呼吸（点击查看原图）</sub></td>
+    <td width="33%" align="center"><a href="assets/readme/step-workshop.jpg"><img src="assets/readme/step-workshop.jpg" alt="步骤工坊真实文章首屏"></a><br><sub>步骤工坊 · 清晰行动感（点击查看原图）</sub></td>
   </tr>
 </table>
 

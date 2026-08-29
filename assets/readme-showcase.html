@@ -47,14 +47,22 @@
     body.single .gallery { display: block; }
     body.single .card { display: none; border-radius: 0; }
     body.single .card.active { display: block; }
-    body.hires { padding-left: calc(50px * var(--density)); }
-    body.hires main {
-      margin: 0;
-      transform: scale(var(--density));
-      transform-origin: 0 0;
-    }
-    body.hires:not(.single) main { width: 1065px; }
-    body.hires.single { padding-left: 0; }
+    body.hires.single main { zoom: var(--density); }
+    body.hires:not(.single) main { width: 1810px; margin-left: 85px; margin-right: 0; padding: 61px 0 50px; }
+    body.hires:not(.single) header { margin-bottom: 40px; }
+    body.hires:not(.single) .eyebrow { margin-bottom: 14px; font-size: 22px; }
+    body.hires:not(.single) h1 { font-size: 61px; }
+    body.hires:not(.single) .promise { font-size: 23px; }
+    body.hires:not(.single) .gallery { gap: 40px; }
+    body.hires:not(.single) .card { border-width: 2px; border-radius: 32px; }
+    body.hires:not(.single) .bar { height: 79px; padding: 0 25px; }
+    body.hires:not(.single) .dots { gap: 11px; }
+    body.hires:not(.single) .dot { width: 13px; height: 13px; }
+    body.hires:not(.single) .name { font-size: 22px; }
+    body.hires:not(.single) .tag { font-size: 18px; }
+    body.hires:not(.single) .viewport { height: 864px; }
+    body.hires:not(.single) iframe { transform: scale(.756); }
+    body.hires:not(.single) footer { margin-top: 29px; font-size: 20px; }
   </style>
   <script>if (new URLSearchParams(location.search).has("theme")) document.body?.classList.add("single");</script>
 </head>
